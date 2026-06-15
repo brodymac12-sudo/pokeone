@@ -184,6 +184,15 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 400; letter-spacing:
 }
 .detail-move.selected .ms-check { background: var(--gold); color: var(--ink); font-weight: 800; }
 
+/* ---- battle stat-stage (buff/debuff) chips ---- */
+.stage-row { display: flex; gap: 5px; margin: 6px 0 2px; flex-wrap: wrap; }
+.stage-chip {
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.3px;
+  padding: 1px 6px; border-radius: 6px; line-height: 1.5;
+}
+.stage-chip.up { background: rgba(94, 234, 212, 0.16); color: #5eead4; border: 1px solid rgba(94, 234, 212, 0.4); }
+.stage-chip.down { background: rgba(245, 158, 11, 0.16); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.42); }
+
 /* ---- Protect guard flash (battle) ---- */
 @keyframes guardFlash { 0% { filter: none; } 35% { filter: drop-shadow(0 0 7px #7fc4e8) brightness(1.5); } 100% { filter: none; } }
 .sprite-wrap.guard-flash { animation: guardFlash 0.42s ease; }

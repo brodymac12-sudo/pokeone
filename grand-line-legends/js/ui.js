@@ -368,10 +368,30 @@ function renderCard(sideKey) {
       ${f.def.types.map(t => typeBadge(t, true)).join('')}
       <span class="ability-tag" title="${f.def.ability.desc}">★ ${f.def.ability.name}</span>
     </div>
+    <div class="stage-row"></div>
     <div class="hp-track"><div class="hp-fill"></div></div>
     <div class="hp-num"></div>`;
   updateHp(sideKey, false);
   updateStatusChip(sideKey);
+  updateStages(sideKey);
+}
+
+/* Persistent buff/debuff readout: one chip per non-zero stat stage. */
+const STAGE_LABELS = { atk: 'ATK', def: 'DEF', spd: 'SPD' };
+function updateStages(sideKey) {
+  const f = fighter(sideKey);
+  const card = $(sideKey === 'player' ? '#player-card' : '#enemy-card');
+  const row = card.querySelector('.stage-row');
+  if (!row) return;
+  const chips = [];
+  for (const s of ['atk', 'def', 'spd']) {
+    const v = f.stages[s];
+    if (!v) continue;
+    const arrows = (v > 0 ? '▲' : '▼').repeat(Math.min(3, Math.abs(v)));
+    chips.push(`<span class="stage-chip ${v > 0 ? 'up' : 'down'}" title="${STAGE_LABELS[s]} ${v > 0 ? '+' : ''}${v} stage${Math.abs(v) > 1 ? 's' : ''}">${STAGE_LABELS[s]} ${arrows}</span>`);
+  }
+  row.innerHTML = chips.join('');
+  row.style.display = chips.length ? 'flex' : 'none';
 }
 
 function updateHp(sideKey) {
@@ -543,6 +563,7 @@ async function playEvents(events) {
         const arrow = ev.delta > 0 ? '▲' : '▼';
         const label = ev.stat.toUpperCase() + ' ' + arrow.repeat(Math.min(2, Math.abs(ev.delta)));
         floatNum(ev.side, label, ev.delta > 0 ? '#5eead4' : '#f59e0b');
+        updateStages(ev.side);
         SFX.status();
         await sleep(300);
         break;

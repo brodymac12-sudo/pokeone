@@ -192,6 +192,7 @@ class Battle {
     old.protecting = false;
     old.protectStreak = 0;
     side.active = idx;
+    side.lastSwitchTurn = this.turn;   // throttles back-to-back AI switching
     this.emit({ t: 'switch', side: sideKey, idx, name: side.crew[idx].name });
     this.emit({ t: 'log', msg: `${sideKey === 'player' ? '🏴‍☠️' : '🏴'} ${old.name} falls back — ${side.crew[idx].name} takes the deck!` });
     this.onSwitchIn(sideKey);
@@ -781,19 +782,24 @@ class Battle {
       options.push({ action: { type: 'move', idx: i }, score });
     }
 
-    /* ---- switch consideration ---- */
-    if (!lateStorm) {
+    /* ---- switch consideration ----
+       Switching costs a whole turn and a free hit, so the AI only does it
+       to escape a clearly losing matchup for a clearly better one, never two
+       turns in a row (which caused dithering / ping-ponging). */
+    const justSwitched = (this.turn - (side.lastSwitchTurn ?? -9)) <= 1;
+    if (!lateStorm && !justSwitched) {
       const curScore = this.matchupScore(me, opp);
       let bestIdx = -1, bestGain = 0;
       side.crew.forEach((f, i) => {
         if (!f.alive || i === side.active) return;
         const incoming = this.bestExpected(opp, f);     // free hit on the switch-in
-        if (incoming >= f.hp) return;                   // never switch into a KO
-        const gain = this.matchupScore(f, opp) - curScore - (incoming / f.maxHp) * 0.55;
+        if (incoming >= f.hp * 0.9) return;             // never switch into a (near) KO
+        // the upgrade must outweigh the lost turn and the free hit taken
+        const gain = this.matchupScore(f, opp) - curScore - (incoming / Math.max(1, f.maxHp)) * 0.9;
         if (gain > bestGain) { bestGain = gain; bestIdx = i; }
       });
-      if (bestIdx >= 0 && bestGain > 0.38 && curScore < -0.12 && opp.hp > opp.maxHp * 0.3) {
-        options.push({ action: { type: 'switch', idx: bestIdx }, score: 40 + bestGain * 110 });
+      if (bestIdx >= 0 && bestGain > 0.6 && curScore < -0.3 && opp.hp > opp.maxHp * 0.35) {
+        options.push({ action: { type: 'switch', idx: bestIdx }, score: 22 + bestGain * 60 });
       }
     }
 
