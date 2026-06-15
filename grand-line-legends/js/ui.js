@@ -5,12 +5,25 @@
 const UI = {
   battle: null,
   playerCrew: [],        // chosen character ids
+  loadouts: {},          // id -> array of 4 chosen move indices (into char.moves)
   opponentChoice: 'random',
   selectedPreset: null,
   busy: false,
   muted: localStorage.getItem('gll-muted') === '1',
   lastCrews: null,       // for rematch
 };
+
+const MOVESET_SIZE = 4;
+/* Default loadout = the character's 4 canonical signature moves. */
+function defaultLoadout() { return [0, 1, 2, 3]; }
+function ensureLoadout(id) {
+  if (!UI.loadouts[id]) UI.loadouts[id] = defaultLoadout();
+  return UI.loadouts[id];
+}
+function loadoutMoves(id) {
+  const c = CHAR_BY_ID[id];
+  return ensureLoadout(id).map(i => c.moves[i]).filter(Boolean);
+}
 
 const $ = sel => document.querySelector(sel);
 const $$ = sel => [...document.querySelectorAll(sel)];
@@ -36,7 +49,8 @@ function statChangeText(obj) {
 function describeMoveFx(mv) {
   const fx = mv.fx || {};
   const parts = [];
-  if ((mv.prio || 0) > 0) parts.push('⚡ priority — acts first');
+  if (fx.protect) parts.push('🛡️ guards — blocks the next attack (weaker if spammed)');
+  if ((mv.prio || 0) > 0 && !fx.protect) parts.push('⚡ priority — acts first');
   if (fx.multi) parts.push(`🌀 hits ${fx.multi[0] === fx.multi[1] ? fx.multi[0] : fx.multi[0] + '–' + fx.multi[1]}×`);
   if (fx.burn) parts.push(`🔥 ${fx.burn}% burn`);
   if (fx.poison) parts.push(`☠️ ${fx.poison}% poison`);
@@ -118,6 +132,7 @@ function buildSelectScreen() {
       SFX.click();
       UI.selectedPreset = crew.id;
       UI.playerCrew = [...crew.members];
+      UI.playerCrew.forEach(ensureLoadout);
       $$('.preset-card').forEach(c => c.classList.toggle('selected', c.dataset.crewId === crew.id));
       renderCrewSlots();
       renderRosterPicks();
@@ -141,8 +156,8 @@ function buildSelectScreen() {
     chip.appendChild(nm);
     chip.addEventListener('click', () => {
       SFX.click();
-      showDetail(c.id);
-      togglePick(c.id);
+      togglePick(c.id);     // update crew membership first…
+      showDetail(c.id);     // …so the detail panel shows the move picker
     });
     roster.appendChild(chip);
   }
@@ -175,7 +190,7 @@ function shortName(c) {
 function togglePick(id) {
   const i = UI.playerCrew.indexOf(id);
   if (i >= 0) UI.playerCrew.splice(i, 1);
-  else if (UI.playerCrew.length < CREW_SIZE) UI.playerCrew.push(id);
+  else if (UI.playerCrew.length < CREW_SIZE) { UI.playerCrew.push(id); ensureLoadout(id); }
   UI.selectedPreset = null;
   $$('.preset-card').forEach(c => c.classList.remove('selected'));
   renderCrewSlots();
@@ -230,18 +245,75 @@ function showDetail(id) {
           <span>${c.stats[s]}</span></div>`).join('')}
     </div>
     <div class="ability-box"><b>★ ${c.ability.name}</b> — ${c.ability.desc}</div>
-    <div class="detail-moves">
-      ${c.moves.map(m => moveRowHTML(m)).join('')}
-    </div>`;
+    ${movesetSectionHTML(c)}`;
   $('#detail-sprite').appendChild(makeSpriteCanvas(id, 6, false));
+  wireMovesetPicker(id);
+}
+
+/* Moves block: an interactive "pick 4" picker when the fighter is in the
+   crew, otherwise a read-only listing of the full pool. */
+function movesetSectionHTML(c) {
+  const inCrew = UI.playerCrew.includes(c.id);
+  if (!inCrew) {
+    return `<div class="moveset-head">Move Pool <span class="ms-hint">— recruit to customize</span></div>
+      <div class="detail-moves">${c.moves.map(m => moveRowHTML(m)).join('')}</div>`;
+  }
+  const lo = ensureLoadout(c.id);
+  return `<div class="moveset-head">Moveset <span class="ms-count">${lo.length}/4</span>
+      <span class="ms-hint">— tap to choose 4</span></div>
+    <div class="detail-moves moveset-pick">
+      ${c.moves.map((m, i) => selectableMoveHTML(m, i, lo.includes(i))).join('')}</div>`;
+}
+
+function selectableMoveHTML(m, idx, selected) {
+  const fxParts = describeMoveFx(m);
+  return `<div class="detail-move selectable${selected ? ' selected' : ''}" data-midx="${idx}">
+    <div class="dm-top"><span class="ms-check">${selected ? '✓' : '＋'}</span>${typeBadge(m.type, true)}
+      <span class="mname">${m.name}</span>
+      <span class="mnum">${m.pow > 0 ? 'PWR ' + m.pow : 'STATUS'} · ACC ${m.acc}</span></div>
+    ${fxParts.length ? `<div class="dm-fx">${fxParts.join(' · ')}</div>` : ''}</div>`;
+}
+
+function wireMovesetPicker(id) {
+  if (!UI.playerCrew.includes(id)) return;
+  $$('#detail-panel .detail-move.selectable').forEach(el => {
+    el.addEventListener('click', () => toggleMoveSelect(id, Number(el.dataset.midx)));
+  });
+}
+
+function toggleMoveSelect(id, idx) {
+  const lo = ensureLoadout(id);
+  const at = lo.indexOf(idx);
+  if (at >= 0) {
+    if (lo.length <= 1) return;           // keep at least one move
+    lo.splice(at, 1);
+  } else {
+    if (lo.length >= MOVESET_SIZE) {
+      const head = $('#detail-panel .ms-count');
+      if (head) { head.classList.remove('nudge'); void head.offsetWidth; head.classList.add('nudge'); }
+      return;
+    }
+    lo.push(idx);
+  }
+  SFX.click();
+  showDetail(id);
+  updateBattleButton();
 }
 
 function updateBattleButton() {
   const btn = $('#btn-battle');
-  btn.disabled = UI.playerCrew.length !== CREW_SIZE;
-  btn.textContent = UI.playerCrew.length === CREW_SIZE
-    ? '⚔️ Set Sail for Battle!'
-    : `Choose ${CREW_SIZE - UI.playerCrew.length} more pirate${CREW_SIZE - UI.playerCrew.length === 1 ? '' : 's'}`;
+  const full = UI.playerCrew.length === CREW_SIZE;
+  const movesReady = UI.playerCrew.every(id => ensureLoadout(id).length === MOVESET_SIZE);
+  btn.disabled = !full || !movesReady;
+  if (!full) {
+    const need = CREW_SIZE - UI.playerCrew.length;
+    btn.textContent = `Choose ${need} more pirate${need === 1 ? '' : 's'}`;
+  } else if (!movesReady) {
+    const who = UI.playerCrew.find(id => ensureLoadout(id).length !== MOVESET_SIZE);
+    btn.textContent = `Finish ${shortName(CHAR_BY_ID[who])}'s moveset (pick 4)`;
+  } else {
+    btn.textContent = '⚔️ Set Sail for Battle!';
+  }
 }
 
 function pickOpponentCrew() {
@@ -257,9 +329,9 @@ function pickOpponentCrew() {
 
 /* ============================ BATTLE SCREEN ============================ */
 
-function startBattle(playerIds, enemyIds) {
-  UI.lastCrews = { player: [...playerIds], enemy: [...enemyIds] };
-  UI.battle = new Battle(playerIds, enemyIds);
+function startBattle(playerIds, enemyIds, playerLoadouts) {
+  UI.lastCrews = { player: [...playerIds], enemy: [...enemyIds], playerLoadouts };
+  UI.battle = new Battle(playerIds, enemyIds, { playerLoadouts });
   UI.busy = false;
   $('#battle-log').innerHTML = '';
   $('#turn-label').textContent = 'BATTLE START';
@@ -346,7 +418,7 @@ function renderMoves() {
   const enemy = fighter('enemy');
   const grid = $('#moves-grid');
   grid.innerHTML = '';
-  f.def.moves.forEach((m, i) => {
+  f.moves.forEach((m, i) => {
     const b = document.createElement('button');
     b.className = 'move-btn';
     b.style.borderLeft = `4px solid ${TYPES[m.type].color}`;
@@ -432,6 +504,11 @@ async function playEvents(events) {
           await sleep(240);
         } else if (ev.kind === 'attack') {
           await sleep(140);
+        } else if (ev.kind === 'protect' || ev.kind === 'blocked') {
+          wrap.classList.add('guard-flash');
+          setTimeout(() => wrap.classList.remove('guard-flash'), 420);
+          SFX.status();
+          await sleep(220);
         }
         break;
       }
@@ -911,8 +988,10 @@ function initUI() {
 
   $('#btn-battle').addEventListener('click', () => {
     if (UI.playerCrew.length !== CREW_SIZE) return;
+    if (!UI.playerCrew.every(id => ensureLoadout(id).length === MOVESET_SIZE)) return;
     SFX.click();
-    startBattle([...UI.playerCrew], pickOpponentCrew());
+    const loadouts = UI.playerCrew.map(id => loadoutMoves(id));
+    startBattle([...UI.playerCrew], pickOpponentCrew(), loadouts);
   });
 
   $('#btn-switch').addEventListener('click', () => { if (!UI.busy) { SFX.click(); openSwitchModal(false); } });
@@ -924,7 +1003,7 @@ function initUI() {
 
   $('#btn-rematch').addEventListener('click', () => {
     SFX.click();
-    if (UI.lastCrews) startBattle([...UI.lastCrews.player], [...UI.lastCrews.enemy]);
+    if (UI.lastCrews) startBattle([...UI.lastCrews.player], [...UI.lastCrews.enemy], UI.lastCrews.playerLoadouts);
   });
   $('#btn-newcrew').addEventListener('click', () => { SFX.click(); showScreen('#screen-select'); });
   $('#btn-result-title').addEventListener('click', () => { SFX.click(); showScreen('#screen-title'); });

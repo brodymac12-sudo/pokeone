@@ -14,9 +14,22 @@ const STATUS_NAMES = {
 const STATUS_ICONS = { burn: 'BRN', poison: 'PSN', para: 'PAR', freeze: 'FRZ', sleep: 'SLP' };
 const STORM_TURN = 30;
 
+/* Resolve a chosen 4-move loadout into actual move objects.
+   loadout may be: undefined (default = first 4 of the pool),
+   an array of pool indices, or an array of move objects. */
+function resolveLoadout(charDef, loadout) {
+  if (!loadout || !loadout.length) return charDef.moves.slice(0, 4);
+  const moves = loadout
+    .map(m => (typeof m === 'number' ? charDef.moves[m] : m))
+    .filter(Boolean)
+    .slice(0, 4);
+  return moves.length ? moves : charDef.moves.slice(0, 4);
+}
+
 class Fighter {
-  constructor(charDef) {
+  constructor(charDef, loadout) {
     this.def = charDef;
+    this.moves = resolveLoadout(charDef, loadout);   // the 4 moves taken into battle
     const rs = realStats(charDef.stats);
     this.maxHp = rs.hp;
     this.hp = rs.hp;
@@ -27,6 +40,8 @@ class Fighter {
     this.status = null;       // burn | poison | para | freeze | sleep
     this.sleepTurns = 0;
     this.stunned = false;     // skips next action
+    this.protecting = false;  // guarding against this turn's attacks
+    this.protectStreak = 0;   // consecutive Protects (diminishing success)
     this.usedRevive = false;
     this.usedSurvive = false;
   }
@@ -39,11 +54,16 @@ class Fighter {
 }
 
 class Battle {
-  /* playerIds / enemyIds: arrays of character ids */
-  constructor(playerIds, enemyIds) {
+  /* playerIds / enemyIds: arrays of character ids.
+     opts.playerLoadouts / opts.enemyLoadouts: optional arrays (parallel to
+     the id arrays) of chosen movesets — each a list of 4 indices or move
+     objects. Omitted entries fall back to the character's default 4. */
+  constructor(playerIds, enemyIds, opts = {}) {
+    const pL = opts.playerLoadouts || [];
+    const eL = opts.enemyLoadouts || [];
     this.sides = {
-      player: { crew: playerIds.map(id => new Fighter(CHAR_BY_ID[id])), active: 0, isAI: false },
-      enemy: { crew: enemyIds.map(id => new Fighter(CHAR_BY_ID[id])), active: 0, isAI: true },
+      player: { crew: playerIds.map((id, i) => new Fighter(CHAR_BY_ID[id], pL[i])), active: 0, isAI: false },
+      enemy: { crew: enemyIds.map((id, i) => new Fighter(CHAR_BY_ID[id], eL[i])), active: 0, isAI: true },
     };
     this.turn = 0;
     this.over = false;
@@ -113,8 +133,8 @@ class Battle {
 
     // 2. moves, ordered by priority then speed
     const movers = [];
-    if (playerAction.type === 'move') movers.push({ side: 'player', mv: this.active('player').def.moves[playerAction.idx] });
-    if (enemyAction.type === 'move') movers.push({ side: 'enemy', mv: this.active('enemy').def.moves[enemyAction.idx] });
+    if (playerAction.type === 'move') movers.push({ side: 'player', mv: this.active('player').moves[playerAction.idx] });
+    if (enemyAction.type === 'move') movers.push({ side: 'enemy', mv: this.active('enemy').moves[enemyAction.idx] });
     movers.sort((a, b) => {
       const pa = this.movePriority(a.side, a.mv), pb = this.movePriority(b.side, b.mv);
       if (pa !== pb) return pb - pa;
@@ -169,6 +189,8 @@ class Battle {
     const old = this.active(sideKey);
     old.stages = { atk: 0, def: 0, spd: 0 };
     old.stunned = false;
+    old.protecting = false;
+    old.protectStreak = 0;
     side.active = idx;
     this.emit({ t: 'switch', side: sideKey, idx, name: side.crew[idx].name });
     this.emit({ t: 'log', msg: `${sideKey === 'player' ? '🏴‍☠️' : '🏴'} ${old.name} falls back — ${side.crew[idx].name} takes the deck!` });
@@ -240,12 +262,30 @@ class Battle {
     const target = this.active(targetKey);
     if (!this.canAct(userKey)) return;
 
+    const fx = mv.fx || {};
+    // any non-Protect action resets the consecutive-guard counter
+    if (!fx.protect) user.protectStreak = 0;
+
     this.emit({ t: 'log', msg: `${userKey === 'player' ? '▶' : '◀'} ${user.name} used ${mv.name}!`, move: mv, side: userKey });
     this.emit({ t: 'anim', kind: 'attack', side: userKey, moveType: mv.type, status: mv.pow === 0 });
 
-    const fx = mv.fx || {};
     const userAb = this.abilityOf(userKey);
     const targetAb = this.abilityOf(targetKey);
+
+    /* ---- Protect: brace against this turn's attacks (diminishing) ---- */
+    if (fx.protect) {
+      const successCh = 100 / (user.protectStreak + 1);
+      if (chance(successCh)) {
+        user.protecting = true;
+        user.protectStreak++;
+        this.emit({ t: 'anim', kind: 'protect', side: userKey });
+        this.emit({ t: 'log', msg: `🛡️ ${user.name} braces behind a guard!` });
+      } else {
+        user.protectStreak = 0;
+        this.emit({ t: 'log', msg: `🛡️ ${user.name}'s guard failed!` });
+      }
+      return;
+    }
 
     /* ---- status (no-damage) moves ---- */
     if (mv.pow === 0) {
@@ -261,6 +301,7 @@ class Battle {
       }
       if (fx.enemy || fx.sleep || fx.stun) {
         if (!target.alive) { this.emit({ t: 'log', msg: 'But there was no target...' }); return; }
+        if (target.protecting) { this.emit({ t: 'log', msg: `🛡️ ${target.name}'s guard holds firm!` }); return; }
         // dodge + accuracy for hostile status moves
         if (targetAb && targetAb.kind === 'dodge' && chance(targetAb.chance)) {
           this.emit({ t: 'log', msg: `💨 ${target.name} slipped away — ${targetAb.name}!` });
@@ -279,6 +320,13 @@ class Battle {
 
     /* ---- damaging moves ---- */
     if (!target.alive) { this.emit({ t: 'log', msg: 'But there was no target...' }); return; }
+
+    // a raised guard blocks the blow outright
+    if (target.protecting) {
+      this.emit({ t: 'anim', kind: 'blocked', side: targetKey });
+      this.emit({ t: 'log', msg: `🛡️ ${target.name}'s guard blocked the attack!` });
+      return;
+    }
 
     // full-type immunity ability (Buggy)
     if (targetAb && targetAb.kind === 'immuneType' && targetAb.type === mv.type) {
@@ -482,6 +530,11 @@ class Battle {
         }
       }
     }
+    // guards last only for the turn they were raised
+    for (const sideKey of ['player', 'enemy']) {
+      const f = this.active(sideKey);
+      if (f) f.protecting = false;
+    }
     this.checkFaints();
   }
 
@@ -600,7 +653,7 @@ class Battle {
   bestExpected(a, b) {
     const [abA, abB] = this.liveAbilities(a, b);
     let best = 0;
-    for (const mv of a.def.moves) {
+    for (const mv of a.moves) {
       if (mv.pow === 0) continue;
       const d = this.estDamage(a, b, mv, abA, abB) * this.hitChance(mv, abA, abB);
       if (d > best) best = d;
@@ -645,8 +698,8 @@ class Battle {
 
     const options = [];
 
-    for (let i = 0; i < me.def.moves.length; i++) {
-      const mv = me.def.moves[i];
+    for (let i = 0; i < me.moves.length; i++) {
+      const mv = me.moves[i];
       const fx = mv.fx || {};
       let score = 0;
 
@@ -673,6 +726,17 @@ class Battle {
       } else {
         /* ---- status moves, valued in HP-equivalents ---- */
         const acc = (fx.neverMiss || (myAb && myAb.kind === 'neverMiss')) ? 1 : mv.acc / 100;
+        if (fx.protect) {
+          // worth most when a guard buys regen/end-of-turn value or stalls a likely KO
+          let v = 0;
+          if (myAb && (myAb.kind === 'regen' || myAb.kind === 'immortal') && me.hp < me.maxHp * 0.85) {
+            v = me.maxHp * myAb.frac * 0.9;
+          }
+          if (oppCanKO) v = Math.max(v, oppBest * 0.5);   // dodge the killing blow
+          v /= (me.protectStreak + 1);                    // diminishing: success halves each time
+          if (lateStorm) v *= 0.2;                        // the storm ignores guards
+          score = Math.max(score, v);
+        }
         if (fx.heal) {
           const missing = me.maxHp - me.hp;
           const healAmt = Math.min(Math.floor(me.maxHp * fx.heal / 100), missing);

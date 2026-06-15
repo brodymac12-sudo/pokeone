@@ -27,7 +27,9 @@ const abilityNames = new Set();
 let statusMoveCount = 0;
 for (const c of CHARACTERS) {
   check(c.types.every(t => TYPES[t]), `${c.id}: valid types`);
-  check(c.moves.length === 4, `${c.id}: has 4 moves`);
+  check(c.moves.length >= 6, `${c.id}: has an expanded movepool (got ${c.moves.length})`);
+  check(c.moves[c.moves.length - 1].name === 'Protect', `${c.id}: pool ends with Protect`);
+  check(c.moves.some(m => m.fx && m.fx.protect), `${c.id}: pool contains a Protect move`);
   abilityNames.add(c.ability.name);
   for (const m of c.moves) {
     check(TYPES[m.type] !== undefined, `${c.id}/${m.name}: valid move type ${m.type}`);
@@ -41,6 +43,35 @@ check(moveNames.size >= CHARACTERS.length * 4 - 2, 'moves are (nearly all) uniqu
 check(abilityNames.size === CHARACTERS.length, 'every ability unique');
 check(statusMoveCount >= 24, `at least 24 status moves (got ${statusMoveCount})`);
 for (const id of ['roger', 'rocks', 'imu', 'loki']) check(sandbox.CHAR_BY_ID[id], `new legend ${id} exists`);
+
+/* ---- loadouts & Protect ---- */
+{
+  // default loadout = the first 4 (canonical signature) moves of the pool
+  const dflt = new sandbox.Battle(['zoro'], ['nami']);
+  const zf = dflt.sides.player.crew[0];
+  check(zf.moves.length === 4, `default loadout is 4 moves (got ${zf.moves.length})`);
+  check(zf.moves.every((m, i) => m === sandbox.CHAR_BY_ID['zoro'].moves[i]), 'default loadout = first 4 of pool');
+
+  // a custom loadout (by index) is honored, including putting Protect first
+  const pool = sandbox.CHAR_BY_ID['luffy'].moves;
+  const protectIdx = pool.findIndex(m => m.fx && m.fx.protect);
+  check(protectIdx >= 0, 'luffy pool contains Protect');
+  const b = new sandbox.Battle(['luffy'], ['kaido'], { playerLoadouts: [[protectIdx, 0, 1, 2]] });
+  const lf = b.sides.player.crew[0];
+  check(lf.moves.length === 4 && lf.moves[0].fx && lf.moves[0].fx.protect, 'custom loadout resolves with Protect first');
+
+  // Protect (high priority) blocks the enemy's attack that turn
+  const before = lf.hp;
+  b.playTurn({ type: 'move', idx: 0 });
+  check(lf.hp === before, `Protect blocked all damage this turn (${before} -> ${lf.hp})`);
+  check(lf.protecting === false, 'guard expires at end of turn');
+
+  // consecutive Protect suffers diminishing success and never throws
+  let guardOk = true;
+  try { for (let k = 0; k < 8; k++) b.playTurn({ type: 'move', idx: 0 }); }
+  catch (e) { guardOk = false; }
+  check(guardOk, 'repeated Protect runs without error');
+}
 
 /* damaging moves should carry secondary effects or priority */
 let dmgMoves = 0, dmgWithFx = 0;
