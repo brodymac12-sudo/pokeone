@@ -360,6 +360,18 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 400; letter-spacing:
 @keyframes attackPulse { 0% { transform: scale(1); } 40% { transform: scale(1.16); } 100% { transform: scale(1); } }
 .sprite-wrap.attack-pulse { animation: attackPulse 0.4s ease; }
 .d-prompt { font-size: 13.5px; color: var(--gold); font-weight: 700; min-height: 18px; letter-spacing: 0.3px; }
+.d-card .d-empty { color: #93a9c2; font-size: 13px; font-style: italic; padding: 14px 4px; text-align: center; }
+.d-bench { display: flex; justify-content: center; gap: 7px; min-height: 8px; }
+.bench-chip {
+  display: flex; align-items: center; justify-content: center; padding: 3px;
+  background: rgba(0, 0, 0, 0.28); border: 1px solid var(--glass-edge); border-radius: 8px;
+}
+.bench-chip.dead { opacity: 0.32; filter: grayscale(1); }
+.d-switch-btn { min-height: 0; }
+.d-switch-btn .mv-meta { color: #9fb8d4; }
+.d-bench-card { display: flex; align-items: center; gap: 10px; }
+.d-bench-card .bench-info { display: flex; flex-direction: column; gap: 3px; }
+.d-bench-card .mv-meta { gap: 5px; }
 #d-battle-log {
   background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 13px;
   height: 218px; overflow-y: auto; padding: 11px 14px; font-size: 13px; line-height: 1.55;

@@ -15,8 +15,8 @@ const UI = {
 };
 
 const MOVESET_SIZE = 4;
-/* How many fighters the player picks: 4 for the standard mode, 2 for doubles. */
-function crewMax() { return UI.mode === 'doubles' ? 2 : CREW_SIZE; }
+/* Both modes draft a crew of 4; doubles just fields two at a time with a bench. */
+function crewMax() { return CREW_SIZE; }
 /* Default loadout = the character's 4 canonical signature moves. */
 function defaultLoadout() { return [0, 1, 2, 3]; }
 function ensureLoadout(id) {
@@ -990,19 +990,12 @@ function openSelect(mode) {
   UI.playerCrew = [];
   UI.selectedPreset = null;
   const h2 = document.querySelector('#screen-select .select-header h2');
+  if (h2) h2.textContent = mode === 'doubles' ? '⚔️ Assemble Your Crew — 2v2 (two fight at once)' : '⚓ Assemble Your Crew';
   const tabs = document.querySelector('#screen-select .tabs');
-  if (mode === 'doubles') {
-    if (h2) h2.textContent = '⚔️ Assemble Your Duo';
-    if (tabs) tabs.style.display = 'none';
-    $('#preset-grid').style.display = 'none';
-    $('#custom-builder').style.display = 'grid';
-  } else {
-    if (h2) h2.textContent = '⚓ Assemble Your Crew';
-    if (tabs) tabs.style.display = '';
-    $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'preset'));
-    $('#preset-grid').style.display = 'grid';
-    $('#custom-builder').style.display = 'none';
-  }
+  if (tabs) tabs.style.display = '';
+  $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'preset'));
+  $('#preset-grid').style.display = 'grid';
+  $('#custom-builder').style.display = 'none';
   $$('.preset-card').forEach(c => c.classList.remove('selected'));
   renderCrewSlots();
   renderRosterPicks();
@@ -1011,10 +1004,10 @@ function openSelect(mode) {
   showScreen('#screen-select');
 }
 
-/* ============================ DOUBLES BATTLE (2v2) ============================ */
+/* ============================ DOUBLES BATTLE (2v2, pick 4 with bench) ============================ */
 
-function dUnitEl(side, slot) { return document.querySelector(`#screen-doubles .d-unit[data-side="${side}"][data-slot="${slot}"]`); }
-function dFighter(side, slot) { return UI.dbl.battle.sides[side].crew[slot]; }
+function dUnitEl(side, pos) { return document.querySelector(`#screen-doubles .d-unit[data-side="${side}"][data-slot="${pos}"]`); }
+function dFighterAt(side, pos) { return UI.dbl.battle.fighterAt(side, pos); }
 
 function startDoublesBattle(playerIds, enemyIds, playerLoadouts) {
   UI.dbl = {
@@ -1027,51 +1020,55 @@ function startDoublesBattle(playerIds, enemyIds, playerLoadouts) {
   $('#d-prompt').textContent = '';
   $('#d-moves-grid').innerHTML = '';
   showScreen('#screen-doubles');
-  for (const side of ['player', 'enemy']) for (let slot = 0; slot < 2; slot++) dRenderUnit(side, slot);
+  for (const side of ['player', 'enemy']) { for (let pos = 0; pos < 2; pos++) dRenderUnit(side, pos); dRenderBench(side); }
   dPlayEvents(UI.dbl.battle.events.slice());   // opening events (intimidate, etc.)
 }
 
-function dRenderUnit(side, slot) {
-  const unit = dUnitEl(side, slot);
-  const f = dFighter(side, slot);
+function dRenderUnit(side, pos) {
+  const unit = dUnitEl(side, pos);
+  const f = dFighterAt(side, pos);
   unit.classList.toggle('fainted-unit', !f || !f.alive);
+  unit.classList.remove('acting', 'targetable');
   const wrap = unit.querySelector('.sprite-wrap');
   wrap.classList.remove('fainted-anim');
   wrap.innerHTML = '';
-  if (f) wrap.appendChild(makeSpriteCanvas(f.def.id, 7, side === 'player'));
-  dRenderCard(side, slot);
+  const card = unit.querySelector('.d-card');
+  if (!f) { card.innerHTML = '<div class="d-empty">— no fighter —</div>'; dRenderBench(side); return; }
+  wrap.appendChild(makeSpriteCanvas(f.def.id, 7, side === 'player'));
+  dRenderCard(side, pos);
+  dRenderBench(side);
 }
 
-function dRenderCard(side, slot) {
-  const f = dFighter(side, slot);
-  const card = dUnitEl(side, slot).querySelector('.d-card');
+function dRenderCard(side, pos) {
+  const f = dFighterAt(side, pos);
+  const card = dUnitEl(side, pos).querySelector('.d-card');
   card.innerHTML = `
     <div class="row1"><span class="fname">${shortName(f.def)}</span><span class="status-chip"></span></div>
     <div class="types-row">${f.def.types.map(t => typeBadge(t, true)).join('')}</div>
     <div class="stage-row"></div>
     <div class="hp-track"><div class="hp-fill"></div></div>
     <div class="hp-num"></div>`;
-  dUpdateHp(side, slot); dUpdateStatus(side, slot); dUpdateStages(side, slot);
+  dUpdateHp(side, pos); dUpdateStatus(side, pos); dUpdateStages(side, pos);
 }
 
-function dUpdateHp(side, slot) {
-  const f = dFighter(side, slot);
-  const fill = dUnitEl(side, slot).querySelector('.hp-fill');
+function dUpdateHp(side, pos) {
+  const f = dFighterAt(side, pos); if (!f) return;
+  const fill = dUnitEl(side, pos).querySelector('.hp-fill'); if (!fill) return;
   const pct = f.maxHp ? (f.hp / f.maxHp) * 100 : 0;
   fill.style.width = pct + '%';
   fill.classList.toggle('mid', pct <= 55 && pct > 25);
   fill.classList.toggle('low', pct <= 25);
-  dUnitEl(side, slot).querySelector('.hp-num').textContent = `${f.hp} / ${f.maxHp}`;
+  dUnitEl(side, pos).querySelector('.hp-num').textContent = `${f.hp} / ${f.maxHp}`;
 }
-function dUpdateStatus(side, slot) {
-  const f = dFighter(side, slot);
-  const chip = dUnitEl(side, slot).querySelector('.status-chip');
+function dUpdateStatus(side, pos) {
+  const f = dFighterAt(side, pos); if (!f) return;
+  const chip = dUnitEl(side, pos).querySelector('.status-chip'); if (!chip) return;
   if (f.status) { chip.style.display = 'inline-block'; chip.style.background = STATUS_CHIP_COLORS[f.status] || '#666'; chip.textContent = STATUS_ICONS[f.status]; }
   else chip.style.display = 'none';
 }
-function dUpdateStages(side, slot) {
-  const f = dFighter(side, slot);
-  const row = dUnitEl(side, slot).querySelector('.stage-row');
+function dUpdateStages(side, pos) {
+  const f = dFighterAt(side, pos); if (!f) return;
+  const row = dUnitEl(side, pos).querySelector('.stage-row'); if (!row) return;
   const chips = [];
   for (const s of ['atk', 'def', 'spd']) {
     const v = f.stages[s]; if (!v) continue;
@@ -1081,8 +1078,23 @@ function dUpdateStages(side, slot) {
   row.innerHTML = chips.join(''); row.style.display = chips.length ? 'flex' : 'none';
 }
 
-function dFloat(side, slot, text, color) {
-  const zone = dUnitEl(side, slot).querySelector('.combatant');
+function dRenderBench(side) {
+  const el = document.querySelector(`#screen-doubles .d-bench[data-side="${side}"]`);
+  if (!el || !UI.dbl) return;
+  const s = UI.dbl.battle.sides[side];
+  el.innerHTML = '';
+  s.crew.forEach((f, i) => {
+    if (s.field.includes(i)) return;          // currently on the front line
+    const chip = document.createElement('div');
+    chip.className = 'bench-chip' + (f.alive ? '' : ' dead');
+    chip.appendChild(makeSpriteCanvas(f.def.id, 2, side === 'player'));
+    chip.title = `${f.name} — ${f.hp}/${f.maxHp}${f.alive ? '' : ' (down)'}`;
+    el.appendChild(chip);
+  });
+}
+
+function dFloat(side, pos, text, color) {
+  const zone = dUnitEl(side, pos).querySelector('.combatant');
   const el = document.createElement('div'); el.className = 'float-num'; el.style.color = color; el.textContent = text;
   zone.appendChild(el); setTimeout(() => el.remove(), 1000);
 }
@@ -1106,6 +1118,7 @@ async function dPlayEvents(events) {
         $('#d-battle-log').appendChild(sep); await sleep(110); break;
       }
       case 'log': dLog(ev.msg); await sleep(ev.move ? 300 : 360); break;
+      case 'switch': dRenderUnit(ev.side, ev.slot); SFX.status(); await sleep(360); break;
       case 'anim': {
         const wrap = dUnitEl(ev.side, ev.slot) && dUnitEl(ev.side, ev.slot).querySelector('.sprite-wrap');
         if (!wrap) break;
@@ -1131,18 +1144,20 @@ async function dPlayEvents(events) {
       case 'faint': {
         const unit = dUnitEl(ev.side, ev.slot);
         unit.querySelector('.sprite-wrap').classList.add('fainted-anim');
-        unit.classList.add('fainted-unit'); SFX.faint(); await sleep(600); break;
+        unit.classList.add('fainted-unit'); SFX.faint(); dRenderBench(ev.side); await sleep(600); break;
       }
       case 'end': await sleep(700); dShowResult(ev.winner); return;
     }
   }
   UI.dbl.busy = false;
-  if (UI.dbl && !UI.dbl.battle.over) dStartPlayerInput();
+  if (!UI.dbl || UI.dbl.battle.over) return;
+  if (UI.dbl.battle.awaiting) { dPromptReplace(); return; }
+  dStartPlayerInput();
 }
 
 function dStartPlayerInput() {
   UI.dbl.pending = [];
-  UI.dbl.queue = UI.dbl.battle.livingSlots('player');
+  UI.dbl.queue = UI.dbl.battle.livingPositions('player');
   dNextInput();
 }
 function dNextInput() {
@@ -1152,20 +1167,23 @@ function dNextInput() {
   UI.dbl.curSlot = UI.dbl.queue.shift();
   UI.dbl.pendingIdx = null;
   UI.dbl.busy = false;
-  const f = dFighter('player', UI.dbl.curSlot);
   dUnitEl('player', UI.dbl.curSlot).classList.add('acting');
-  $('#d-prompt').textContent = `▶ Choose ${shortName(f.def)}'s move`;
+  dShowCurrentMoves();
+}
+function dShowCurrentMoves() {
+  const f = dFighterAt('player', UI.dbl.curSlot);
+  $('#d-prompt').textContent = `▶ Choose ${shortName(f.def)}'s action`;
   dRenderMoves(f);
 }
 function dRenderMoves(f) {
   const grid = $('#d-moves-grid'); grid.innerHTML = '';
-  const enemies = UI.dbl.battle.livingSlots('enemy');
+  const enemies = UI.dbl.battle.livingPositions('enemy');
   f.moves.forEach((m, i) => {
     const b = document.createElement('button');
     b.className = 'move-btn'; b.style.borderLeft = `4px solid ${TYPES[m.type].color}`;
     let effHint = '';
     if (m.pow > 0 && enemies.length) {
-      const eff = typeEffectiveness(m.type, dFighter('enemy', enemies[0]).def.types);
+      const eff = typeEffectiveness(m.type, dFighterAt('enemy', enemies[0]).def.types);
       if (eff === 0) effHint = '<span class="eff-hint zero">✕</span>';
       else if (eff > 1) effHint = '<span class="eff-hint up">▲▲</span>';
       else if (eff < 1) effHint = '<span class="eff-hint down">▼</span>';
@@ -1177,27 +1195,38 @@ function dRenderMoves(f) {
     b.addEventListener('click', () => dPickMove(i));
     grid.appendChild(b);
   });
+  if (dAvailableBench().length) {
+    const sw = document.createElement('button');
+    sw.className = 'move-btn d-switch-btn';
+    sw.innerHTML = `<span class="mv-name">🔄 Switch out</span><span class="mv-meta">bring in a reserve (uses this fighter's turn)</span>`;
+    sw.addEventListener('click', () => dPickSwitch());
+    grid.appendChild(sw);
+  }
   dSetMovesEnabled(true);
+}
+function dAvailableBench() {
+  if (!UI.dbl) return [];
+  return UI.dbl.battle.benchIndices('player').filter(i => !UI.dbl.pending.some(a => a.type === 'switch' && a.toCrewIdx === i));
 }
 function dPickMove(idx) {
   if (UI.dbl.busy) return;
-  const f = dFighter('player', UI.dbl.curSlot);
+  const f = dFighterAt('player', UI.dbl.curSlot);
   const mv = f.moves[idx], fx = mv.fx || {};
   const needsTarget = mv.pow > 0 || fx.enemy || fx.sleep || fx.stun;
-  const enemies = UI.dbl.battle.livingSlots('enemy');
+  const enemies = UI.dbl.battle.livingPositions('enemy');
   if (!needsTarget) return dRecord(idx, null);
-  if (enemies.length <= 1) return dRecord(idx, { side: 'enemy', slot: enemies[0] });
+  if (enemies.length <= 1) return dRecord(idx, { side: 'enemy', pos: enemies[0] });
   UI.dbl.pendingIdx = idx;
   $('#d-prompt').textContent = `🎯 ${mv.name}: tap the enemy to hit`;
   dSetMovesEnabled(false);
-  enemies.forEach(slot => {
-    const u = dUnitEl('enemy', slot);
+  enemies.forEach(pos => {
+    const u = dUnitEl('enemy', pos);
     u.classList.add('targetable');
-    u._targetHandler = () => dPickTarget(slot);
+    u._targetHandler = () => dPickTarget(pos);
     u.addEventListener('click', u._targetHandler);
   });
 }
-function dPickTarget(slot) { dRecord(UI.dbl.pendingIdx, { side: 'enemy', slot }); }
+function dPickTarget(pos) { dRecord(UI.dbl.pendingIdx, { side: 'enemy', pos }); }
 function dClearTargetable() {
   document.querySelectorAll('#screen-doubles .d-unit.targetable').forEach(u => {
     u.classList.remove('targetable');
@@ -1205,10 +1234,55 @@ function dClearTargetable() {
   });
 }
 function dRecord(idx, target) {
-  UI.dbl.pending.push({ slot: UI.dbl.curSlot, type: 'move', idx, target });
+  UI.dbl.pending.push({ pos: UI.dbl.curSlot, type: 'move', idx, target });
   SFX.click();
   dClearTargetable();
   dNextInput();
+}
+function dPickSwitch() {
+  if (UI.dbl.busy) return;
+  const avail = dAvailableBench();
+  if (!avail.length) return;
+  dSetMovesEnabled(false);
+  dShowBench(`🔄 Switch — choose a reserve to bring in`, avail, idx => dRecordSwitch(idx), true);
+}
+function dRecordSwitch(idx) {
+  UI.dbl.pending.push({ pos: UI.dbl.curSlot, type: 'switch', toCrewIdx: idx });
+  SFX.click();
+  dNextInput();
+}
+function dShowBench(prompt, avail, onPick, allowCancel) {
+  $('#d-prompt').textContent = prompt;
+  const grid = $('#d-moves-grid'); grid.innerHTML = '';
+  avail.forEach(idx => {
+    const f = UI.dbl.battle.sides.player.crew[idx];
+    const b = document.createElement('button'); b.className = 'move-btn d-bench-card';
+    b.appendChild(makeSpriteCanvas(f.def.id, 4, false));
+    const info = document.createElement('span'); info.className = 'bench-info';
+    info.innerHTML = `<span class="mv-name">${shortName(f.def)}</span>
+      <span class="mv-meta">${f.def.types.map(t => typeBadge(t, true)).join('')}<span>${f.hp}/${f.maxHp}</span></span>`;
+    b.appendChild(info);
+    b.addEventListener('click', () => onPick(idx));
+    grid.appendChild(b);
+  });
+  if (allowCancel) {
+    const c = document.createElement('button'); c.className = 'move-btn';
+    c.innerHTML = '<span class="mv-name">↩ Back</span>';
+    c.addEventListener('click', () => { SFX.click(); dShowCurrentMoves(); });
+    grid.appendChild(c);
+  }
+}
+function dPromptReplace() {
+  const pos = UI.dbl.battle.awaiting.positions[0];
+  const avail = UI.dbl.battle.benchIndices('player');
+  document.querySelectorAll('#screen-doubles .d-unit.acting').forEach(u => u.classList.remove('acting'));
+  dUnitEl('player', pos).classList.add('acting');
+  dShowBench(`💀 Position open — send out the next fighter!`, avail, idx => {
+    SFX.click();
+    const evs = UI.dbl.battle.submitReplace(pos, idx);
+    dRenderUnit('player', pos);
+    dPlayEvents(evs);
+  }, false);
 }
 function dResolveRound() {
   document.querySelectorAll('#screen-doubles .d-unit.acting').forEach(u => u.classList.remove('acting'));

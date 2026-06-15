@@ -812,37 +812,49 @@ class Battle {
   }
 }
 
-/* ===================== DOUBLES (2v2) =====================
-   A self-contained doubles engine: two fighters per side are active at
-   once (no bench). It reuses Fighter, the type chart and the exact damage
-   / ability / status rules of the single-battle engine, but is slot-aware
-   — every event carries {side, slot} so the UI can target the right
-   fighter, and moves choose which living foe to hit. */
+/* ===================== DOUBLES (2v2 with bench) =====================
+   Each side brings a crew of 4; two fighters hold the front line while the
+   rest wait on the bench. Fainted front-liners are replaced from the bench
+   (the player chooses; the AI auto-picks the best matchup), and the player
+   may voluntarily switch a front-liner for a bench mate as that fighter's
+   action. Combat rules mirror the single engine exactly, but addressed by
+   field position (0/1) so the UI can target the right on-screen slot. */
+const DOUBLES_ACTIVE = 2;
+
 class DoublesBattle {
   constructor(playerIds, enemyIds, opts = {}) {
     const pL = opts.playerLoadouts || [], eL = opts.enemyLoadouts || [];
     this.sides = {
-      player: { crew: playerIds.map((id, i) => new Fighter(CHAR_BY_ID[id], pL[i])), isAI: false },
-      enemy: { crew: enemyIds.map((id, i) => new Fighter(CHAR_BY_ID[id], eL[i])), isAI: true },
+      player: { crew: playerIds.map((id, i) => new Fighter(CHAR_BY_ID[id], pL[i])), field: [], isAI: false },
+      enemy: { crew: enemyIds.map((id, i) => new Fighter(CHAR_BY_ID[id], eL[i])), field: [], isAI: true },
     };
+    for (const sk of ['player', 'enemy']) {
+      const s = this.sides[sk];
+      for (let i = 0; i < s.crew.length && s.field.length < DOUBLES_ACTIVE; i++) if (s.crew[i].alive) s.field.push(i);
+      while (s.field.length < DOUBLES_ACTIVE) s.field.push(null);
+    }
     this.turn = 0;
     this.over = false;
     this.winner = null;
+    this.awaiting = null;     // { side:'player', positions:[...] } when a replacement is owed
     this.events = [];
-    this.emit({ t: 'log', msg: '⚔️ A 2-on-2 clash erupts across the waves!' });
-    for (const sk of ['player', 'enemy'])
-      this.sides[sk].crew.forEach((f, slot) => { if (f && f.alive) this.onSwitchIn(sk, slot); });
+    this.emit({ t: 'log', msg: '⚔️ A 2-on-2 clash erupts — four per crew, two in the fray!' });
+    for (const sk of ['player', 'enemy']) for (let pos = 0; pos < DOUBLES_ACTIVE; pos++) {
+      const f = this.fighterAt(sk, pos);
+      if (f && f.alive) this.onSwitchIn(sk, pos);
+    }
   }
 
   emit(ev) { this.events.push(ev); }
   other(sk) { return sk === 'player' ? 'enemy' : 'player'; }
-  fighter(sk, slot) { return this.sides[sk].crew[slot]; }
-  livingSlots(sk) { const r = []; this.sides[sk].crew.forEach((f, i) => { if (f && f.alive) r.push(i); }); return r; }
-  oppActives(sk) { const o = this.other(sk); return this.livingSlots(o).map(slot => ({ slot, f: this.fighter(o, slot) })); }
+  fighterAt(sk, pos) { const idx = this.sides[sk].field[pos]; return idx == null ? null : this.sides[sk].crew[idx]; }
+  livingPositions(sk) { const r = []; for (let pos = 0; pos < DOUBLES_ACTIVE; pos++) { const f = this.fighterAt(sk, pos); if (f && f.alive) r.push(pos); } return r; }
+  benchIndices(sk) { const s = this.sides[sk]; return s.crew.map((f, i) => i).filter(i => s.crew[i].alive && !s.field.includes(i)); }
+  oppActives(sk) { const o = this.other(sk); return this.livingPositions(o).map(pos => ({ pos, f: this.fighterAt(o, pos) })); }
+  crewAlive(sk) { return this.sides[sk].crew.some(f => f.alive); }
 
-  /* Ability is live unless an opposing active nullifies it (Black Hole). */
-  abilityOf(sk, slot) {
-    const f = this.fighter(sk, slot);
+  abilityOf(sk, pos) {
+    const f = this.fighterAt(sk, pos);
     if (!f || !f.alive) return null;
     if (f.def.ability.kind !== 'nullify' && this.oppActives(sk).some(o => o.f.def.ability.kind === 'nullify')) return null;
     return f.def.ability;
@@ -871,80 +883,93 @@ class DoublesBattle {
     return p;
   }
 
-  changeStage(sk, slot, stat, delta) {
-    const f = this.fighter(sk, slot);
+  changeStage(sk, pos, stat, delta) {
+    const f = this.fighterAt(sk, pos);
     const before = f.stages[stat];
     f.stages[stat] = Math.max(-4, Math.min(4, before + delta));
     const changed = f.stages[stat] - before;
-    if (changed !== 0) this.emit({ t: 'stat', side: sk, slot, stat, delta: changed });
+    if (changed !== 0) this.emit({ t: 'stat', side: sk, slot: pos, stat, delta: changed });
     return changed;
   }
 
-  onSwitchIn(sk, slot) {
-    const ab = this.abilityOf(sk, slot), f = this.fighter(sk, slot);
+  onSwitchIn(sk, pos) {
+    const ab = this.abilityOf(sk, pos), f = this.fighterAt(sk, pos);
     if (ab && ab.kind === 'intimidate') {
       for (const o of this.oppActives(sk)) {
-        if (this.changeStage(this.other(sk), o.slot, 'atk', -1))
+        if (this.changeStage(this.other(sk), o.pos, 'atk', -1))
           this.emit({ t: 'log', msg: `👁️ ${f.name}'s ${ab.name} presses down on ${o.f.name} — Attack fell!` });
       }
     }
   }
 
-  canAct(sk, slot) {
-    const f = this.fighter(sk, slot);
+  /* voluntary switch: front-liner at pos swaps with a living bench mate */
+  doSwitch(sk, pos, toCrewIdx) {
+    const s = this.sides[sk];
+    if (toCrewIdx == null || !s.crew[toCrewIdx] || !s.crew[toCrewIdx].alive || s.field.includes(toCrewIdx)) return false;
+    const old = this.fighterAt(sk, pos);
+    if (old) { old.stunned = false; old.protecting = false; old.protectStreak = 0; }   // stat stages persist
+    s.field[pos] = toCrewIdx;
+    this.emit({ t: 'switch', side: sk, slot: pos, name: s.crew[toCrewIdx].name });
+    this.emit({ t: 'log', msg: `${sk === 'player' ? '🏴‍☠️' : '🏴'} ${old ? old.name + ' falls back — ' : ''}${s.crew[toCrewIdx].name} takes the front!` });
+    this.onSwitchIn(sk, pos);
+    return true;
+  }
+
+  canAct(sk, pos) {
+    const f = this.fighterAt(sk, pos);
     if (f.stunned) {
       f.stunned = false;
       this.emit({ t: 'log', msg: `💫 ${f.name} is stunned and can't move!` });
-      this.emit({ t: 'anim', kind: 'stunned', side: sk, slot });
+      this.emit({ t: 'anim', kind: 'stunned', side: sk, slot: pos });
       return false;
     }
     if (f.status === 'freeze') {
-      if (chance(25)) { f.status = null; this.emit({ t: 'status', side: sk, slot, status: null }); this.emit({ t: 'log', msg: `🧊 ${f.name} broke out of the ice!` }); }
+      if (chance(25)) { f.status = null; this.emit({ t: 'status', side: sk, slot: pos, status: null }); this.emit({ t: 'log', msg: `🧊 ${f.name} broke out of the ice!` }); }
       else { this.emit({ t: 'log', msg: `🧊 ${f.name} is frozen solid!` }); return false; }
     }
     if (f.status === 'sleep') {
-      if (f.sleepTurns <= 0) { f.status = null; this.emit({ t: 'status', side: sk, slot, status: null }); this.emit({ t: 'log', msg: `☀️ ${f.name} woke up!` }); }
+      if (f.sleepTurns <= 0) { f.status = null; this.emit({ t: 'status', side: sk, slot: pos, status: null }); this.emit({ t: 'log', msg: `☀️ ${f.name} woke up!` }); }
       else { f.sleepTurns--; this.emit({ t: 'log', msg: `💤 ${f.name} is fast asleep...` }); return false; }
     }
     if (f.status === 'para' && chance(20)) { this.emit({ t: 'log', msg: `⚡ ${f.name} is paralyzed and can't move!` }); return false; }
     return true;
   }
 
-  applyStatus(sk, slot, status, sourceNote) {
-    const f = this.fighter(sk, slot);
-    if (!f.alive || f.status) return;
-    const ab = this.abilityOf(sk, slot);
+  applyStatus(sk, pos, status, sourceNote) {
+    const f = this.fighterAt(sk, pos);
+    if (!f || !f.alive || f.status) return;
+    const ab = this.abilityOf(sk, pos);
     if (status === 'burn' && ab && ab.burnImmune) { this.emit({ t: 'log', msg: `🔥 ${f.name} walks through flames unburnt!` }); return; }
     if ((status === 'burn' || status === 'poison') && ab && ab.kind === 'immortal') { this.emit({ t: 'log', msg: `👁️ ${f.name}'s immortal body rejects the affliction!` }); return; }
     f.status = status;
     if (status === 'sleep') f.sleepTurns = randInt(1, 3);
-    this.emit({ t: 'status', side: sk, slot, status });
+    this.emit({ t: 'status', side: sk, slot: pos, status });
     this.emit({ t: 'log', msg: `${statusEmoji(status)} ${f.name} is ${STATUS_NAMES[status]}!${sourceNote ? ' (' + sourceNote + ')' : ''}` });
   }
-  applyStun(sk, slot, sourceNote) {
-    const f = this.fighter(sk, slot);
-    if (!f.alive || f.stunned) return;
+  applyStun(sk, pos, sourceNote) {
+    const f = this.fighterAt(sk, pos);
+    if (!f || !f.alive || f.stunned) return;
     f.stunned = true;
     this.emit({ t: 'log', msg: `💫 ${f.name} is stunned!${sourceNote ? ' (' + sourceNote + ')' : ''}` });
   }
 
-  /* Faithful port of single-battle useMove, addressed by (side, slot). */
-  resolveMove(uSk, uSlot, mv, tSk, tSlot) {
-    const user = this.fighter(uSk, uSlot);
-    if (!this.canAct(uSk, uSlot)) return;
+  /* Faithful port of single-battle useMove, addressed by (side, position). */
+  resolveMove(uSk, uPos, mv, tSk, tPos) {
+    const user = this.fighterAt(uSk, uPos);
+    if (!this.canAct(uSk, uPos)) return;
     const fx = mv.fx || {};
     if (!fx.protect) user.protectStreak = 0;
 
-    this.emit({ t: 'log', msg: `${uSk === 'player' ? '▶' : '◀'} ${user.name} used ${mv.name}!`, move: mv, side: uSk, slot: uSlot });
-    this.emit({ t: 'anim', kind: 'attack', side: uSk, slot: uSlot, moveType: mv.type, status: mv.pow === 0 });
+    this.emit({ t: 'log', msg: `${uSk === 'player' ? '▶' : '◀'} ${user.name} used ${mv.name}!`, move: mv, side: uSk, slot: uPos });
+    this.emit({ t: 'anim', kind: 'attack', side: uSk, slot: uPos, moveType: mv.type, status: mv.pow === 0 });
 
-    const userAb = this.abilityOf(uSk, uSlot);
-    const target = (tSk != null && tSlot != null) ? this.fighter(tSk, tSlot) : null;
-    const targetAb = target ? this.abilityOf(tSk, tSlot) : null;
+    const userAb = this.abilityOf(uSk, uPos);
+    const target = (tSk != null && tPos != null) ? this.fighterAt(tSk, tPos) : null;
+    const targetAb = target ? this.abilityOf(tSk, tPos) : null;
 
     if (fx.protect) {
       const successCh = 100 / (user.protectStreak + 1);
-      if (chance(successCh)) { user.protecting = true; user.protectStreak++; this.emit({ t: 'anim', kind: 'protect', side: uSk, slot: uSlot }); this.emit({ t: 'log', msg: `🛡️ ${user.name} braces behind a guard!` }); }
+      if (chance(successCh)) { user.protecting = true; user.protectStreak++; this.emit({ t: 'anim', kind: 'protect', side: uSk, slot: uPos }); this.emit({ t: 'log', msg: `🛡️ ${user.name} braces behind a guard!` }); }
       else { user.protectStreak = 0; this.emit({ t: 'log', msg: `🛡️ ${user.name}'s guard failed!` }); }
       return;
     }
@@ -953,11 +978,11 @@ class DoublesBattle {
       if (fx.heal) {
         const healed = Math.min(Math.floor(user.maxHp * fx.heal / 100), user.maxHp - user.hp);
         user.hp += healed;
-        this.emit({ t: 'heal', side: uSk, slot: uSlot, amount: healed, hp: user.hp });
+        this.emit({ t: 'heal', side: uSk, slot: uPos, amount: healed, hp: user.hp });
         this.emit({ t: 'log', msg: `💚 ${user.name} recovered ${healed} HP!` });
       }
       if (fx.self) for (const [stat, d] of Object.entries(fx.self))
-        if (this.changeStage(uSk, uSlot, stat, d)) this.emit({ t: 'log', msg: `📈 ${user.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}${Math.abs(d) > 1 ? ' sharply' : ''}!` });
+        if (this.changeStage(uSk, uPos, stat, d)) this.emit({ t: 'log', msg: `📈 ${user.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}${Math.abs(d) > 1 ? ' sharply' : ''}!` });
       if (fx.enemy || fx.sleep || fx.stun) {
         if (!target || !target.alive) { this.emit({ t: 'log', msg: 'But there was no target...' }); return; }
         if (target.protecting) { this.emit({ t: 'log', msg: `🛡️ ${target.name}'s guard holds firm!` }); return; }
@@ -965,15 +990,15 @@ class DoublesBattle {
         const hits = (userAb && userAb.kind === 'neverMiss') || fx.neverMiss || chance(mv.acc);
         if (!hits) { this.emit({ t: 'log', msg: `💨 But it missed!` }); return; }
         if (fx.enemy) for (const [stat, d] of Object.entries(fx.enemy))
-          if (this.changeStage(tSk, tSlot, stat, d)) this.emit({ t: 'log', msg: `📉 ${target.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}${Math.abs(d) > 1 ? ' sharply' : ''}!` });
-        if (fx.sleep && chance(fx.sleep)) this.applyStatus(tSk, tSlot, 'sleep');
-        if (fx.stun && chance(fx.stun)) this.applyStun(tSk, tSlot);
+          if (this.changeStage(tSk, tPos, stat, d)) this.emit({ t: 'log', msg: `📉 ${target.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}${Math.abs(d) > 1 ? ' sharply' : ''}!` });
+        if (fx.sleep && chance(fx.sleep)) this.applyStatus(tSk, tPos, 'sleep');
+        if (fx.stun && chance(fx.stun)) this.applyStun(tSk, tPos);
       }
       return;
     }
 
     if (!target || !target.alive) { this.emit({ t: 'log', msg: 'But there was no target...' }); return; }
-    if (target.protecting) { this.emit({ t: 'anim', kind: 'blocked', side: tSk, slot: tSlot }); this.emit({ t: 'log', msg: `🛡️ ${target.name}'s guard blocked the attack!` }); return; }
+    if (target.protecting) { this.emit({ t: 'anim', kind: 'blocked', side: tSk, slot: tPos }); this.emit({ t: 'log', msg: `🛡️ ${target.name}'s guard blocked the attack!` }); return; }
     if (targetAb && targetAb.kind === 'immuneType' && targetAb.type === mv.type) { this.emit({ t: 'log', msg: `🤡 It passed right through — ${target.name}'s ${targetAb.name}!` }); return; }
     if (targetAb && targetAb.kind === 'dodge' && chance(targetAb.chance)) { this.emit({ t: 'log', msg: `💨 ${target.name} dodged — ${targetAb.name}!` }); return; }
     const neverMiss = (userAb && userAb.kind === 'neverMiss') || fx.neverMiss;
@@ -1012,7 +1037,7 @@ class DoublesBattle {
       if (survAb && !target.usedSurvive && dmg >= target.hp) { dmg = target.hp - 1; target.usedSurvive = true; this.emit({ t: 'log', msg: `🌙 ${target.name} refuses to fall — ${targetAb.name}!` }); }
       target.hp = Math.max(0, target.hp - dmg);
       totalDmg += dmg;
-      this.emit({ t: 'damage', side: tSk, slot: tSlot, amount: dmg, hp: target.hp, eff, crit: isCrit, moveType: mv.type });
+      this.emit({ t: 'damage', side: tSk, slot: tPos, amount: dmg, hp: target.hp, eff, crit: isCrit, moveType: mv.type });
     }
     if (nHits > 1) this.emit({ t: 'log', msg: `🌀 Hit ${nHits} times!` });
     if (landedCrit) this.emit({ t: 'log', msg: `💥 A critical hit!` });
@@ -1024,60 +1049,60 @@ class DoublesBattle {
       if (userAb && userAb.kind === 'lifesteal') drainFrac = Math.max(drainFrac, userAb.frac);
       if (drainFrac > 0 && user.alive) {
         const healed = Math.min(Math.max(1, Math.floor(totalDmg * drainFrac)), user.maxHp - user.hp);
-        if (healed > 0) { user.hp += healed; this.emit({ t: 'heal', side: uSk, slot: uSlot, amount: healed, hp: user.hp }); this.emit({ t: 'log', msg: `🩸 ${user.name} drained ${healed} HP!` }); }
+        if (healed > 0) { user.hp += healed; this.emit({ t: 'heal', side: uSk, slot: uPos, amount: healed, hp: user.hp }); this.emit({ t: 'log', msg: `🩸 ${user.name} drained ${healed} HP!` }); }
       }
       if (fx.recoil && user.alive) {
         const rec = Math.max(1, Math.floor(totalDmg * fx.recoil / 100));
         user.hp = Math.max(0, user.hp - rec);
-        this.emit({ t: 'damage', side: uSk, slot: uSlot, amount: rec, hp: user.hp, eff: 1, crit: false, recoil: true });
+        this.emit({ t: 'damage', side: uSk, slot: uPos, amount: rec, hp: user.hp, eff: 1, crit: false, recoil: true });
         this.emit({ t: 'log', msg: `💢 ${user.name} is hit with recoil!` });
       }
       if (target.alive) {
         let burnCh = (fx.burn || 0);
         if (userAb && userAb.kind === 'bonusBurn') burnCh += userAb.chance;
-        if (burnCh && chance(burnCh)) this.applyStatus(tSk, tSlot, 'burn');
-        if (fx.poison && chance(fx.poison)) this.applyStatus(tSk, tSlot, 'poison');
-        if (fx.para && chance(fx.para)) this.applyStatus(tSk, tSlot, 'para');
-        if (fx.freeze && chance(fx.freeze)) this.applyStatus(tSk, tSlot, 'freeze');
-        if (fx.sleep && chance(fx.sleep)) this.applyStatus(tSk, tSlot, 'sleep');
+        if (burnCh && chance(burnCh)) this.applyStatus(tSk, tPos, 'burn');
+        if (fx.poison && chance(fx.poison)) this.applyStatus(tSk, tPos, 'poison');
+        if (fx.para && chance(fx.para)) this.applyStatus(tSk, tPos, 'para');
+        if (fx.freeze && chance(fx.freeze)) this.applyStatus(tSk, tPos, 'freeze');
+        if (fx.sleep && chance(fx.sleep)) this.applyStatus(tSk, tPos, 'sleep');
         let stunCh = (fx.stun || 0);
         if (userAb && userAb.kind === 'bonusStun') stunCh += userAb.chance;
-        if (stunCh && chance(stunCh)) this.applyStun(tSk, tSlot);
+        if (stunCh && chance(stunCh)) this.applyStun(tSk, tPos);
         if (fx.enemy && chance(fx.enemyChance !== undefined ? fx.enemyChance : 100))
           for (const [stat, d] of Object.entries(fx.enemy))
-            if (this.changeStage(tSk, tSlot, stat, d)) this.emit({ t: 'log', msg: `📉 ${target.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}!` });
+            if (this.changeStage(tSk, tPos, stat, d)) this.emit({ t: 'log', msg: `📉 ${target.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}!` });
         if (fx.self)
           for (const [stat, d] of Object.entries(fx.self))
-            if (this.changeStage(uSk, uSlot, stat, d)) this.emit({ t: 'log', msg: `${d > 0 ? '📈' : '📉'} ${user.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}!` });
+            if (this.changeStage(uSk, uPos, stat, d)) this.emit({ t: 'log', msg: `${d > 0 ? '📈' : '📉'} ${user.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}!` });
         if (targetAb && targetAb.kind === 'thorns' && user.alive && chance(targetAb.chance)) {
-          if (targetAb.status === 'stun') this.applyStun(uSk, uSlot, `💘 ${targetAb.name}!`);
-          else this.applyStatus(uSk, uSlot, targetAb.status, `${targetAb.name}!`);
+          if (targetAb.status === 'stun') this.applyStun(uSk, uPos, `💘 ${targetAb.name}!`);
+          else this.applyStatus(uSk, uPos, targetAb.status, `${targetAb.name}!`);
         }
       }
-      if (mv.type === 'FLAME' && target.status === 'freeze') { target.status = null; this.emit({ t: 'status', side: tSk, slot: tSlot, status: null }); this.emit({ t: 'log', msg: `💧 The ice around ${target.name} melted!` }); }
+      if (mv.type === 'FLAME' && target.status === 'freeze') { target.status = null; this.emit({ t: 'status', side: tSk, slot: tPos, status: null }); this.emit({ t: 'log', msg: `💧 The ice around ${target.name} melted!` }); }
     }
   }
 
   endOfTurn() {
     if (this.turn === STORM_TURN) this.emit({ t: 'log', msg: '🌊 The sky darkens... a New World storm closes in!' });
-    const allLiving = () => [].concat(
-      this.livingSlots('player').map(s => ['player', s]),
-      this.livingSlots('enemy').map(s => ['enemy', s]));
-    if (this.turn > STORM_TURN) for (const [sk, slot] of allLiving()) {
-      const f = this.fighter(sk, slot);
+    const living = () => [].concat(
+      this.livingPositions('player').map(p => ['player', p]),
+      this.livingPositions('enemy').map(p => ['enemy', p]));
+    if (this.turn > STORM_TURN) for (const [sk, pos] of living()) {
+      const f = this.fighterAt(sk, pos);
       const d = Math.max(1, Math.floor(f.maxHp * 0.04 * (this.turn - STORM_TURN)));
       f.hp = Math.max(0, f.hp - d);
-      this.emit({ t: 'damage', side: sk, slot, amount: d, hp: f.hp, eff: 1, crit: false, dot: 'storm' });
+      this.emit({ t: 'damage', side: sk, slot: pos, amount: d, hp: f.hp, eff: 1, crit: false, dot: 'storm' });
       this.emit({ t: 'log', msg: `🌊 The storm batters ${f.name}!` });
     }
-    for (const [sk, slot] of allLiving()) {
-      const f = this.fighter(sk, slot);
-      if (f.status === 'burn') { const d = Math.max(1, Math.floor(f.maxHp / 16)); f.hp = Math.max(0, f.hp - d); this.emit({ t: 'damage', side: sk, slot, amount: d, hp: f.hp, eff: 1, crit: false, dot: 'burn' }); this.emit({ t: 'log', msg: `🔥 ${f.name} is hurt by its burn!` }); }
-      else if (f.status === 'poison') { const d = Math.max(1, Math.floor(f.maxHp / 8)); f.hp = Math.max(0, f.hp - d); this.emit({ t: 'damage', side: sk, slot, amount: d, hp: f.hp, eff: 1, crit: false, dot: 'poison' }); this.emit({ t: 'log', msg: `☠️ ${f.name} is hurt by poison!` }); }
-      const ab = this.abilityOf(sk, slot);
+    for (const [sk, pos] of living()) {
+      const f = this.fighterAt(sk, pos);
+      if (f.status === 'burn') { const d = Math.max(1, Math.floor(f.maxHp / 16)); f.hp = Math.max(0, f.hp - d); this.emit({ t: 'damage', side: sk, slot: pos, amount: d, hp: f.hp, eff: 1, crit: false, dot: 'burn' }); this.emit({ t: 'log', msg: `🔥 ${f.name} is hurt by its burn!` }); }
+      else if (f.status === 'poison') { const d = Math.max(1, Math.floor(f.maxHp / 8)); f.hp = Math.max(0, f.hp - d); this.emit({ t: 'damage', side: sk, slot: pos, amount: d, hp: f.hp, eff: 1, crit: false, dot: 'poison' }); this.emit({ t: 'log', msg: `☠️ ${f.name} is hurt by poison!` }); }
+      const ab = this.abilityOf(sk, pos);
       if (ab && (ab.kind === 'regen' || ab.kind === 'immortal') && f.alive && f.hp > 0 && f.hp < f.maxHp) {
         const healed = Math.min(Math.floor(f.maxHp * ab.frac), f.maxHp - f.hp);
-        if (healed > 0) { f.hp += healed; this.emit({ t: 'heal', side: sk, slot, amount: healed, hp: f.hp }); this.emit({ t: 'log', msg: `🔵 ${f.name} regenerates ${healed} HP — ${ab.name}!` }); }
+        if (healed > 0) { f.hp += healed; this.emit({ t: 'heal', side: sk, slot: pos, amount: healed, hp: f.hp }); this.emit({ t: 'log', msg: `🔵 ${f.name} regenerates ${healed} HP — ${ab.name}!` }); }
       }
     }
     for (const sk of ['player', 'enemy']) this.sides[sk].crew.forEach(f => { if (f) f.protecting = false; });
@@ -1085,34 +1110,69 @@ class DoublesBattle {
   }
 
   checkFaints() {
-    for (const sk of ['player', 'enemy']) this.sides[sk].crew.forEach((f, slot) => {
-      if (!f || f.hp > 0 || f._fainted) return;
-      if (f.def.ability.kind === 'revive' && !f.usedRevive && this.abilityOf(sk, slot)) {
+    for (const sk of ['player', 'enemy']) for (let pos = 0; pos < DOUBLES_ACTIVE; pos++) {
+      const f = this.fighterAt(sk, pos);
+      if (!f || f.hp > 0 || f._fainted) continue;
+      if (f.def.ability.kind === 'revive' && !f.usedRevive && this.abilityOf(sk, pos)) {
         f.usedRevive = true; f.hp = Math.floor(f.maxHp * f.def.ability.frac); f.status = null; f.stunned = false;
-        this.emit({ t: 'heal', side: sk, slot, amount: f.hp, hp: f.hp });
+        this.emit({ t: 'heal', side: sk, slot: pos, amount: f.hp, hp: f.hp });
         this.emit({ t: 'log', msg: `🎻 ${f.name}'s soul returns to his bones — ${f.def.ability.name}!` });
-        return;
+        continue;
       }
       f._fainted = true; f.hp = 0; f.status = null;
-      this.emit({ t: 'faint', side: sk, slot, name: f.name });
+      this.emit({ t: 'faint', side: sk, slot: pos, name: f.name });
       this.emit({ t: 'log', msg: `💀 ${f.name} is down!` });
-      for (const rk of ['player', 'enemy']) this.livingSlots(rk).forEach(rs => {
-        const rab = this.abilityOf(rk, rs);
-        if (rab && rab.kind === 'rage' && this.changeStage(rk, rs, 'atk', 1))
-          this.emit({ t: 'log', msg: `😈 ${this.fighter(rk, rs).name}'s ${rab.name} swells — Attack rose!` });
+      for (const rk of ['player', 'enemy']) this.livingPositions(rk).forEach(rp => {
+        const rab = this.abilityOf(rk, rp);
+        if (rab && rab.kind === 'rage' && this.changeStage(rk, rp, 'atk', 1))
+          this.emit({ t: 'log', msg: `😈 ${this.fighterAt(rk, rp).name}'s ${rab.name} swells — Attack rose!` });
       });
-    });
+    }
     this.checkWin();
   }
   checkWin() {
     if (this.over) return;
-    const p = this.livingSlots('player').length, e = this.livingSlots('enemy').length;
-    if (p === 0 && e === 0) { this.over = true; this.winner = 'draw'; this.emit({ t: 'end', winner: 'draw' }); }
-    else if (e === 0) { this.over = true; this.winner = 'player'; this.emit({ t: 'end', winner: 'player' }); }
-    else if (p === 0) { this.over = true; this.winner = 'enemy'; this.emit({ t: 'end', winner: 'enemy' }); }
+    const p = this.crewAlive('player'), e = this.crewAlive('enemy');
+    if (!p && !e) { this.over = true; this.winner = 'draw'; this.emit({ t: 'end', winner: 'draw' }); }
+    else if (!e) { this.over = true; this.winner = 'player'; this.emit({ t: 'end', winner: 'player' }); }
+    else if (!p) { this.over = true; this.winner = 'enemy'; this.emit({ t: 'end', winner: 'enemy' }); }
   }
 
-  /* ---- AI shared with the single engine's estimators ---- */
+  /* fill emptied front-line positions: enemy auto, player by prompt */
+  resolveReplacements() {
+    if (this.over) return;
+    for (let pos = 0; pos < DOUBLES_ACTIVE; pos++) {
+      const f = this.fighterAt('enemy', pos);
+      if ((!f || !f.alive) && this.benchIndices('enemy').length) {
+        const idx = this.bestReplacement('enemy', pos);
+        this.sides.enemy.field[pos] = idx;
+        this.emit({ t: 'switch', side: 'enemy', slot: pos, name: this.sides.enemy.crew[idx].name });
+        this.emit({ t: 'log', msg: `🏴 The enemy sends out ${this.sides.enemy.crew[idx].name}!` });
+        this.onSwitchIn('enemy', pos);
+      }
+    }
+    const need = [];
+    for (let pos = 0; pos < DOUBLES_ACTIVE; pos++) { const f = this.fighterAt('player', pos); if ((!f || !f.alive) && this.benchIndices('player').length) need.push(pos); }
+    if (need.length) { this.awaiting = { side: 'player', positions: need }; this.emit({ t: 'needReplace', positions: need }); }
+  }
+
+  /* player picks a bench fighter (crewIdx) to fill an empty position */
+  submitReplace(pos, crewIdx) {
+    this.events = [];
+    if (!this.awaiting) return this.events;
+    const s = this.sides.player;
+    if (!s.crew[crewIdx] || !s.crew[crewIdx].alive || s.field.includes(crewIdx)) return this.events;
+    s.field[pos] = crewIdx;
+    this.emit({ t: 'switch', side: 'player', slot: pos, name: s.crew[crewIdx].name });
+    this.emit({ t: 'log', msg: `🏴‍☠️ ${s.crew[crewIdx].name} takes the front!` });
+    this.onSwitchIn('player', pos);
+    const need = [];
+    for (let p = 0; p < DOUBLES_ACTIVE; p++) { const f = this.fighterAt('player', p); if ((!f || !f.alive) && this.benchIndices('player').length) need.push(p); }
+    this.awaiting = need.length ? { side: 'player', positions: need } : null;
+    if (this.awaiting) this.emit({ t: 'needReplace', positions: need });
+    return this.events;
+  }
+
   estDamage(att, def, mv, attAb, defAb) {
     if (!mv || mv.pow === 0 || !def) return 0;
     if (defAb && defAb.kind === 'immuneType' && defAb.type === mv.type) return 0;
@@ -1143,26 +1203,42 @@ class DoublesBattle {
     if (defAb && defAb.kind === 'dodge') p *= 1 - defAb.chance / 100;
     return p;
   }
+  bestExpected(a, b) {
+    let abA = a.def.ability, abB = b.def.ability;
+    if (abA && abA.kind === 'nullify' && abB && abB.kind !== 'nullify') abB = null;
+    if (abB && abB.kind === 'nullify' && abA && abA.kind !== 'nullify') abA = null;
+    let best = 0;
+    for (const mv of a.moves) { if (mv.pow === 0) continue; const d = this.estDamage(a, b, mv, abA, abB) * this.hitChance(mv, abA, abB); if (d > best) best = d; }
+    return best;
+  }
+  bestReplacement(sk, pos) {
+    const bench = this.benchIndices(sk), opps = this.oppActives(sk);
+    let best = bench[0], bestSc = -Infinity;
+    for (const i of bench) {
+      const f = this.sides[sk].crew[i];
+      let sc = (f.hp / f.maxHp) * 0.3;
+      for (const o of opps) sc += this.bestExpected(f, o.f) / Math.max(1, o.f.hp) - this.bestExpected(o.f, f) / Math.max(1, f.hp);
+      if (sc > bestSc) { bestSc = sc; best = i; }
+    }
+    return best;
+  }
 
-  /* Choose a move + target for one enemy fighter: focus-fire the foe it can
-     KO or hurt most, with light value for status/heal/setup. */
-  chooseAI(sk, slot) {
-    const me = this.fighter(sk, slot), myAb = this.abilityOf(sk, slot);
-    const opps = this.oppActives(sk);
-    const oSide = this.other(sk);
+  chooseAI(sk, pos) {
+    const me = this.fighterAt(sk, pos), myAb = this.abilityOf(sk, pos);
+    const opps = this.oppActives(sk), oSide = this.other(sk);
     if (!opps.length) return { type: 'move', idx: 0, target: null };
-    let best = { score: -1, idx: 0, target: { side: oSide, slot: opps[0].slot } };
-    const consider = (sc, idx, slotT) => { if (sc > best.score) best = { score: sc, idx, target: { side: oSide, slot: slotT } }; };
+    let best = { score: -1, idx: 0, target: { side: oSide, pos: opps[0].pos } };
+    const consider = (sc, idx, p) => { if (sc > best.score) best = { score: sc, idx, target: { side: oSide, pos: p } }; };
     for (let i = 0; i < me.moves.length; i++) {
       const mv = me.moves[i], fx = mv.fx || {};
       if (mv.pow > 0) {
         for (const o of opps) {
-          const dAb = this.abilityOf(oSide, o.slot);
+          const dAb = this.abilityOf(oSide, o.pos);
           const raw = this.estDamage(me, o.f, mv, myAb, dAb);
           let sc = Math.min(raw, o.f.hp) * this.hitChance(mv, myAb, dAb);
           if (raw >= o.f.hp) sc += 45;
           if (!o.f.status) sc += ((fx.burn || 0) + (fx.poison || 0) + (fx.para || 0) + (fx.freeze || 0) + (fx.sleep || 0)) * 0.4;
-          consider(sc, i, o.slot);
+          consider(sc, i, o.pos);
         }
       } else {
         const tgt = opps[0];
@@ -1172,55 +1248,56 @@ class DoublesBattle {
         if (fx.protect) sc = Math.max(sc, 9 / (me.protectStreak + 1));
         if ((fx.sleep || fx.stun) && !tgt.f.status && !tgt.f.stunned) sc = Math.max(sc, 26);
         if (fx.enemy) sc = Math.max(sc, 18);
-        consider(sc, i, tgt.slot);
+        consider(sc, i, tgt.pos);
       }
     }
     return { type: 'move', idx: best.idx, target: best.target };
   }
 
-  /* playerActions: [{ slot, type:'move', idx, target:{side,slot} }] for living
-     player slots. Returns the event list for the round. */
+  /* playerActions: [{ pos, type:'move', idx, target:{side,pos} } | { pos, type:'switch', toCrewIdx }] */
   playRound(playerActions) {
     this.events = [];
-    if (this.over) return this.events;
+    if (this.over || this.awaiting) return this.events;
     this.turn++;
     this.emit({ t: 'turnStart', n: this.turn });
 
+    for (const a of (playerActions || [])) if (a.type === 'switch') this.doSwitch('player', a.pos, a.toCrewIdx);
+
     const movers = [];
-    const enqueue = (sk, slot, act) => {
-      const f = this.fighter(sk, slot);
+    const enq = (sk, pos, act) => {
+      const f = this.fighterAt(sk, pos);
       if (!f || !f.alive || !act || act.type !== 'move') return;
-      movers.push({ sk, slot, mv: f.moves[act.idx], tgt: act.target });
+      movers.push({ sk, pos, mv: f.moves[act.idx], tgt: act.target });
     };
-    for (const a of (playerActions || [])) enqueue('player', a.slot, a);
-    for (const slot of this.livingSlots('enemy')) enqueue('enemy', slot, this.chooseAI('enemy', slot));
+    for (const a of (playerActions || [])) if (a.type === 'move') enq('player', a.pos, a);
+    for (const pos of this.livingPositions('enemy')) enq('enemy', pos, this.chooseAI('enemy', pos));
 
     movers.sort((a, b) => {
-      const pa = this.movePriority(this.abilityOf(a.sk, a.slot), a.mv);
-      const pb = this.movePriority(this.abilityOf(b.sk, b.slot), b.mv);
+      const pa = this.movePriority(this.abilityOf(a.sk, a.pos), a.mv);
+      const pb = this.movePriority(this.abilityOf(b.sk, b.pos), b.mv);
       if (pa !== pb) return pb - pa;
-      const sa = this.effSpd(this.fighter(a.sk, a.slot), this.abilityOf(a.sk, a.slot));
-      const sb = this.effSpd(this.fighter(b.sk, b.slot), this.abilityOf(b.sk, b.slot));
+      const sa = this.effSpd(this.fighterAt(a.sk, a.pos), this.abilityOf(a.sk, a.pos));
+      const sb = this.effSpd(this.fighterAt(b.sk, b.pos), this.abilityOf(b.sk, b.pos));
       if (sa !== sb) return sb - sa;
       return rngFloat() < 0.5 ? -1 : 1;
     });
 
     for (const m of movers) {
       if (this.over) break;
-      const f = this.fighter(m.sk, m.slot);
+      const f = this.fighterAt(m.sk, m.pos);
       if (!f || !f.alive) continue;
       let tSk = m.tgt ? m.tgt.side : this.other(m.sk);
-      let tSlot = m.tgt ? m.tgt.slot : (this.livingSlots(this.other(m.sk))[0]);
-      // retarget if the chosen foe already fell
-      if (!this.fighter(tSk, tSlot) || !this.fighter(tSk, tSlot).alive) {
-        const living = this.livingSlots(this.other(m.sk));
-        if (living.length) { tSk = this.other(m.sk); tSlot = living[0]; }
+      let tPos = m.tgt ? m.tgt.pos : this.livingPositions(this.other(m.sk))[0];
+      if (!this.fighterAt(tSk, tPos) || !this.fighterAt(tSk, tPos).alive) {
+        const liv = this.livingPositions(this.other(m.sk));
+        if (liv.length) { tSk = this.other(m.sk); tPos = liv[0]; }
       }
-      this.resolveMove(m.sk, m.slot, m.mv, tSk, tSlot);
+      this.resolveMove(m.sk, m.pos, m.mv, tSk, tPos);
       this.checkFaints();
     }
     if (!this.over) this.endOfTurn();
     this.checkWin();
+    if (!this.over) this.resolveReplacements();
     return this.events;
   }
 }
