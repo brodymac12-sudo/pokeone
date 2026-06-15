@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grand Line Legends — One Piece Crew Battler</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Pirata+One&family=Rubik:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ==================== TITLE ==================== -->
+  <section id="screen-title" class="screen active">
+    <div class="title-jolly">🏴‍☠️</div>
+    <h1 class="game-logo">GRAND LINE<br>LEGENDS</h1>
+    <p class="tagline">Assemble your pirate crew. Master 16 powers of the sea. Conquer the Grand Line.</p>
+    <div class="title-actions">
+      <button id="btn-setsail" class="btn btn-gold btn-big">⚓ Set Sail</button>
+      <button id="btn-tournament" class="btn btn-ghost btn-big">🏆 Tournament</button>
+      <button id="btn-library" class="btn btn-ghost btn-big">📖 Library</button>
+      <button id="btn-typechart" class="btn btn-ghost btn-big">📜 Type Chart</button>
+    </div>
+    <div class="title-foot">A fan-made tactical battler inspired by One Piece · 33 legends · 132 signature moves</div>
+    <div class="wave-band"></div>
+  </section>
+
+  <!-- ==================== CREW SELECT ==================== -->
+  <section id="screen-select" class="screen">
+    <div class="select-header">
+      <h2>⚓ Assemble Your Crew</h2>
+      <div style="display:flex;gap:9px">
+        <button id="btn-select-library" class="btn">📖 Library</button>
+        <button id="btn-back-title" class="btn">← Title</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="preset">Famous Crews</div>
+      <div class="tab" data-tab="custom">Build Your Own</div>
+    </div>
+
+    <div id="preset-grid" class="preset-grid"></div>
+
+    <div id="custom-builder" class="builder" style="display:none">
+      <div class="roster-panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <strong>Recruit Pirates (pick 4)</strong>
+        </div>
+        <div id="crew-slots" class="crew-slots"></div>
+        <div id="roster-grid" class="roster-grid"></div>
+      </div>
+      <div id="detail-panel" class="detail-panel"></div>
+    </div>
+
+    <div class="vs-row">
+      <label for="opponent-select">Opposing crew:</label>
+      <select id="opponent-select"></select>
+      <button id="btn-battle" class="btn btn-gold btn-big" disabled>Choose your crew</button>
+    </div>
+  </section>
+
+  <!-- ==================== BATTLE ==================== -->
+  <section id="screen-battle" class="screen">
+    <div class="battle-header">
+      <div class="crew-dots" id="player-dots"></div>
+      <div class="turn-label" id="turn-label">BATTLE START</div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div class="crew-dots" id="enemy-dots"></div>
+        <button id="btn-mute" class="btn" style="padding:5px 11px">🔊</button>
+      </div>
+    </div>
+
+    <div class="arena">
+      <div class="info-card" id="enemy-card"></div>
+      <div class="combatant" id="enemy-zone">
+        <div class="sprite-wrap"></div>
+        <div class="deck"></div>
+      </div>
+      <div class="combatant" id="player-zone">
+        <div class="sprite-wrap"></div>
+        <div class="deck"></div>
+      </div>
+      <div class="info-card" id="player-card"></div>
+    </div>
+
+    <div class="battle-bottom">
+      <div id="battle-log"></div>
+      <div id="action-panel">
+        <div id="moves-grid" class="moves-grid"></div>
+        <div class="action-row">
+          <button id="btn-switch" class="btn">🔄 Crew</button>
+          <button id="btn-forfeit" class="btn btn-danger">🏳️ Forfeit</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== TOURNAMENT ==================== -->
+  <section id="screen-tournament" class="screen">
+    <div class="select-header">
+      <h2>🏆 Grand Line Tournament</h2>
+      <div style="display:flex;gap:9px">
+        <button id="btn-tour-rerun" class="btn" style="display:none">🔄 Run Again</button>
+        <button id="btn-tour-back" class="btn">← Title</button>
+      </div>
+    </div>
+
+    <div id="tour-intro" class="tour-intro">
+      <div style="font-size:46px">🏆</div>
+      <p class="tour-blurb">Every legend on the Grand Line duels every other legend — <b>10 battles per pairing,
+      5,280 clashes in all</b>. The sea keeps every record, crowns its true king, and remembers
+      the strangest upsets, the closest deadlocks, and the cruelest sweeps.</p>
+      <button id="btn-tour-run" class="btn btn-gold btn-big">⚔️ Begin the Tournament</button>
+    </div>
+
+    <div id="tour-progress" class="tour-progress" style="display:none">
+      <div class="tour-bar-track"><div id="tour-bar" class="tour-bar"></div></div>
+      <div id="tour-progress-label" class="tour-progress-label">Raising the sails…</div>
+    </div>
+
+    <div id="tour-results" style="display:none;width:100%">
+      <h3 class="tour-subhead">⭐ Matches of the Tournament</h3>
+      <div id="tour-highlights" class="tour-highlights"></div>
+      <h3 class="tour-subhead">🔥 Legendary Rivalries</h3>
+      <div id="tour-rivalries" class="tour-rivalries"></div>
+      <h3 class="tour-subhead">🏅 World Ranking <span class="tour-hint">— click a fighter for their best &amp; worst matchups</span></h3>
+      <div id="tour-table" class="tour-table"></div>
+    </div>
+  </section>
+
+  <!-- ==================== LIBRARY ==================== -->
+  <section id="screen-library" class="screen">
+    <div class="select-header">
+      <h2>📖 Pirate Library</h2>
+      <div style="display:flex;gap:9px;align-items:center">
+        <select id="lib-sort" class="lib-sort">
+          <option value="bst">Sort: Power</option>
+          <option value="name">Sort: Name</option>
+          <option value="crew">Sort: Crew</option>
+        </select>
+        <button id="btn-lib-back" class="btn">← Back</button>
+      </div>
+    </div>
+    <div class="builder lib-layout">
+      <div class="roster-panel">
+        <div id="lib-grid" class="roster-grid lib-grid"></div>
+      </div>
+      <div id="lib-detail" class="detail-panel lib-detail"></div>
+    </div>
+  </section>
+
+  <!-- ==================== RESULT ==================== -->
+  <section id="screen-result" class="screen">
+    <h1 id="result-title" class="result-title win">VICTORY!</h1>
+    <p id="result-sub" class="result-sub"></p>
+    <div class="result-crews">
+      <div class="result-crew">
+        <h4>🏴‍☠️ Your Crew</h4>
+        <div id="result-player" class="result-faces"></div>
+      </div>
+      <div class="result-crew">
+        <h4>🏴 Enemy Crew</h4>
+        <div id="result-enemy" class="result-faces"></div>
+      </div>
+    </div>
+    <div class="result-actions">
+      <button id="btn-rematch" class="btn btn-gold btn-big">⚔️ Rematch</button>
+      <button id="btn-newcrew" class="btn btn-big">⚓ New Crew</button>
+      <button id="btn-result-title" class="btn btn-big">🏠 Title</button>
+    </div>
+  </section>
+
+  <!-- ==================== MODALS ==================== -->
+  <div id="modal-switch" class="modal-back">
+    <div class="modal">
+      <h3 id="switch-title">Switch Crew Member</h3>
+      <div id="switch-grid" class="switch-grid"></div>
+      <div class="modal-foot">
+        <button id="btn-switch-cancel" class="btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-typechart" class="modal-back">
+    <div class="modal" style="max-width:760px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h3>📜 Powers of the Grand Line</h3>
+        <button id="btn-tc-close" class="btn">✕</button>
+      </div>
+      <div class="tc-legend">
+        <span><span class="tc-swatch" style="background:rgba(34,197,94,.45)"></span>2× super effective</span>
+        <span><span class="tc-swatch" style="background:rgba(217,119,6,.4)"></span>½× resisted</span>
+        <span><span class="tc-swatch" style="background:rgba(100,116,139,.5)"></span>0× immune</span>
+      </div>
+      <div class="tc-wrap" id="tc-table-wrap"></div>
+      <p style="font-size:12px;color:#93a9c2;margin-top:10px;line-height:1.6">
+        ⚔️ Physical arts (Slash / Strike / Shot) deal half damage to intangible Logia elements — but <b>Haki strikes the true body for double</b>.
+        🌊 The Sea is the bane of Devil Fruit powers. ⚡ Rubber is immune to Lightning.
+        Matching a move to your own type grants 1.5× power. After turn 30, a storm batters both crews harder each turn — no hiding!
+      </p>
+      <div class="modal-foot"><button id="btn-tc-close2" class="btn btn-gold">Got it</button></div>
+    </div>
+  </div>
+
+</div>
+
+<script src="js/data.js"></script>
+<script src="js/sprites.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>
