@@ -334,6 +334,41 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 400; letter-spacing:
 .action-row { display: flex; gap: 9px; }
 .action-row .btn { flex: 1; }
 
+/* ==================== DOUBLES (2v2) ==================== */
+.d-arena {
+  width: 100%; margin: 12px 0; border-radius: 18px; padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 14px;
+  background:
+    radial-gradient(420px 130px at 78% 50%, rgba(232, 184, 74, 0.1), transparent 70%),
+    linear-gradient(180deg, #6db5e8 0%, #3a7fb8 38%, #16466e 70%, #0e2c4a 100%);
+  border: 1px solid var(--panel-edge); box-shadow: inset 0 0 80px rgba(4, 12, 24, 0.5);
+}
+.d-row { display: flex; justify-content: center; gap: 18px; }
+.d-unit { display: flex; flex-direction: column; align-items: center; gap: 7px; flex: 1; max-width: 330px; transition: opacity 0.45s; }
+.d-unit .combatant { position: static; }
+.d-unit .info-card.d-card { position: static; min-width: 0; max-width: none; width: 100%; padding: 7px 10px; }
+.d-card .row1 { justify-content: space-between; }
+.d-card .fname { font-size: 15.5px; }
+.d-card .types-row { margin: 3px 0 5px; }
+.d-card .ability-tag { display: none; }
+.d-unit.acting .d-card { box-shadow: 0 0 0 2px var(--gold), 0 8px 22px rgba(0, 0, 0, 0.45); }
+.d-unit.fainted-unit { opacity: 0.32; }
+.d-unit.targetable { cursor: pointer; }
+.d-unit.targetable .sprite-wrap { outline: 2px dashed var(--gold); outline-offset: 4px; border-radius: 9px; animation: targetPulse 0.9s infinite; }
+.d-unit.targetable:hover .sprite-wrap { outline-color: #fff; outline-style: solid; }
+@keyframes targetPulse { 0%, 100% { outline-color: var(--gold); } 50% { outline-color: #fff7d6; } }
+@keyframes attackPulse { 0% { transform: scale(1); } 40% { transform: scale(1.16); } 100% { transform: scale(1); } }
+.sprite-wrap.attack-pulse { animation: attackPulse 0.4s ease; }
+.d-prompt { font-size: 13.5px; color: var(--gold); font-weight: 700; min-height: 18px; letter-spacing: 0.3px; }
+#d-battle-log {
+  background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 13px;
+  height: 218px; overflow-y: auto; padding: 11px 14px; font-size: 13px; line-height: 1.55;
+}
+#d-battle-log .logline { color: #b9cce0; animation: logIn 0.25s ease; }
+#d-battle-log .logline.latest { color: var(--parchment); }
+#d-battle-log .turnsep { color: var(--gold-dim); font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; margin-top: 7px; border-top: 1px solid rgba(232, 184, 74, 0.15); padding-top: 6px; }
+@media (max-width: 760px) { .d-row { gap: 8px; } .d-card .fname { font-size: 13px; } }
+
 /* switch modal & shared modal */
 .modal-back {
   position: fixed; inset: 0; background: rgba(4, 10, 20, 0.72); display: none;

@@ -166,6 +166,51 @@ for (let i = 0; i < CHARACTERS.length; i++) {
   check(b.over, `mirror battle for ${a} finished`);
 }
 
+/* ---- doubles (2v2) engine ---- */
+{
+  function rcPair() {
+    const pool = CHARACTERS.map(c => c.id), c = [];
+    for (let i = 0; i < 2; i++) c.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+    return c;
+  }
+  function doublesAI(b, sk) {
+    return b.livingSlots(sk).map(slot => ({ slot, ...b.chooseAI(sk, slot) }));
+  }
+  let dFinished = 0, dTurns = 0, statEvt = false, bothActiveSeen = false;
+  for (let i = 0; i < 200; i++) {
+    const b = new sandbox.DoublesBattle(rcPair(), rcPair());
+    if (b.livingSlots('player').length === 2 && b.livingSlots('enemy').length === 2) bothActiveSeen = true;
+    let g = 0;
+    while (!b.over && g < 300) {
+      g++;
+      const evs = b.playRound(doublesAI(b, 'player'));
+      if (evs.some(e => e.t === 'stat')) statEvt = true;
+      for (const sk of ['player', 'enemy']) for (const f of b.sides[sk].crew)
+        check(f.hp >= 0 && f.hp <= f.maxHp, `doubles hp bounds: ${f.name} ${f.hp}/${f.maxHp}`);
+      // every event that targets a fighter must carry a valid slot
+      for (const e of evs) if (['damage', 'heal', 'faint', 'status', 'stat'].includes(e.t))
+        check(e.slot === 0 || e.slot === 1, `doubles event ${e.t} has slot`);
+    }
+    check(b.over, `doubles battle ${i} finished (turns=${b.turn})`);
+    if (b.over) { dFinished++; dTurns += b.turn; }
+    // winner must actually have a living fighter
+    if (b.over && b.winner !== 'draw') check(b.livingSlots(b.winner).length > 0, `doubles winner ${b.winner} has a survivor`);
+  }
+  check(bothActiveSeen, 'doubles starts with two active per side');
+  check(statEvt, 'doubles emits stat-stage events');
+  console.log(`\ndoubles: ${dFinished}/200 finished, avg turns ${(dTurns / dFinished).toFixed(1)}`);
+}
+
+/* ---- stat stages persist across a switch (single battle) ---- */
+{
+  const b = new sandbox.Battle(['rocks', 'zoro'], ['buggy', 'nami']);
+  b.changeStage('player', 'atk', 2);
+  check(b.active('player').stages.atk === 2, 'buff applied');
+  b.doSwitch('player', 1);
+  b.doSwitch('player', 0);
+  check(b.active('player').stages.atk === 2, 'stat buff persists across switch out and back');
+}
+
 /* ---- balance audit: 1v1 round-robin win-rate matrix ---- */
 function duel(idA, idB) {
   const b = new sandbox.Battle([idA], [idB]);

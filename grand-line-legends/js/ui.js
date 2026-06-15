@@ -4,6 +4,7 @@
 
 const UI = {
   battle: null,
+  mode: 'single',        // 'single' (4v4) | 'doubles' (2v2)
   playerCrew: [],        // chosen character ids
   loadouts: {},          // id -> array of 4 chosen move indices (into char.moves)
   opponentChoice: 'random',
@@ -14,6 +15,8 @@ const UI = {
 };
 
 const MOVESET_SIZE = 4;
+/* How many fighters the player picks: 4 for the standard mode, 2 for doubles. */
+function crewMax() { return UI.mode === 'doubles' ? 2 : CREW_SIZE; }
 /* Default loadout = the character's 4 canonical signature moves. */
 function defaultLoadout() { return [0, 1, 2, 3]; }
 function ensureLoadout(id) {
@@ -190,7 +193,7 @@ function shortName(c) {
 function togglePick(id) {
   const i = UI.playerCrew.indexOf(id);
   if (i >= 0) UI.playerCrew.splice(i, 1);
-  else if (UI.playerCrew.length < CREW_SIZE) { UI.playerCrew.push(id); ensureLoadout(id); }
+  else if (UI.playerCrew.length < crewMax()) { UI.playerCrew.push(id); ensureLoadout(id); }
   UI.selectedPreset = null;
   $$('.preset-card').forEach(c => c.classList.remove('selected'));
   renderCrewSlots();
@@ -205,7 +208,7 @@ function renderRosterPicks() {
 function renderCrewSlots() {
   const slots = $('#crew-slots');
   slots.innerHTML = '';
-  for (let i = 0; i < CREW_SIZE; i++) {
+  for (let i = 0; i < crewMax(); i++) {
     const slot = document.createElement('div');
     slot.className = 'crew-slot';
     const id = UI.playerCrew[i];
@@ -302,28 +305,30 @@ function toggleMoveSelect(id, idx) {
 
 function updateBattleButton() {
   const btn = $('#btn-battle');
-  const full = UI.playerCrew.length === CREW_SIZE;
+  const max = crewMax();
+  const full = UI.playerCrew.length === max;
   const movesReady = UI.playerCrew.every(id => ensureLoadout(id).length === MOVESET_SIZE);
   btn.disabled = !full || !movesReady;
   if (!full) {
-    const need = CREW_SIZE - UI.playerCrew.length;
+    const need = max - UI.playerCrew.length;
     btn.textContent = `Choose ${need} more pirate${need === 1 ? '' : 's'}`;
   } else if (!movesReady) {
     const who = UI.playerCrew.find(id => ensureLoadout(id).length !== MOVESET_SIZE);
     btn.textContent = `Finish ${shortName(CHAR_BY_ID[who])}'s moveset (pick 4)`;
   } else {
-    btn.textContent = '⚔️ Set Sail for Battle!';
+    btn.textContent = UI.mode === 'doubles' ? '⚔️ Begin 2v2 Duel!' : '⚔️ Set Sail for Battle!';
   }
 }
 
 function pickOpponentCrew() {
+  const n = crewMax();
   if (UI.opponentChoice !== 'random') {
     const preset = PRESET_CREWS.find(c => c.id === UI.opponentChoice);
-    if (preset) return [...preset.members];
+    if (preset) return preset.members.slice(0, n);
   }
   const pool = CHARACTERS.map(c => c.id).filter(id => !UI.playerCrew.includes(id));
   const crew = [];
-  for (let i = 0; i < CREW_SIZE; i++) crew.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  for (let i = 0; i < n; i++) crew.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
   return crew;
 }
 
@@ -667,21 +672,24 @@ function buildTypeChart() {
 }
 
 /* ---- result ---- */
-function showResult(winner) {
-  UI.busy = false;
-  const win = winner === 'player';
+function showResult(winner) { UI.busy = false; showResultGeneric(winner, UI.battle); }
+
+function showResultGeneric(winner, battle) {
   const t = $('#result-title');
-  t.textContent = win ? 'VICTORY!' : 'DEFEAT...';
-  t.className = 'result-title ' + (win ? 'win' : 'lose');
-  $('#result-sub').textContent = win
-    ? 'Your crew rules these waters. The Grand Line sings your name!'
-    : 'Your crew was scattered to the waves. Regroup and set sail again!';
-  (win ? SFX.win : SFX.lose)();
+  const win = winner === 'player', draw = winner === 'draw';
+  t.textContent = draw ? 'DRAW!' : win ? 'VICTORY!' : 'DEFEAT...';
+  t.className = 'result-title ' + (draw ? 'win' : win ? 'win' : 'lose');
+  $('#result-sub').textContent = draw
+    ? 'Both crews fell together — the sea claims no victor this day.'
+    : win
+      ? 'Your crew rules these waters. The Grand Line sings your name!'
+      : 'Your crew was scattered to the waves. Regroup and set sail again!';
+  (win || draw ? SFX.win : SFX.lose)();
 
   for (const sideKey of ['player', 'enemy']) {
     const wrap = $(sideKey === 'player' ? '#result-player' : '#result-enemy');
     wrap.innerHTML = '';
-    UI.battle.sides[sideKey].crew.forEach(f => {
+    battle.sides[sideKey].crew.forEach(f => {
       const rf = document.createElement('div');
       rf.className = 'rf' + (f.alive ? '' : ' dead');
       rf.appendChild(makeSpriteCanvas(f.def.id, 4, false));
@@ -975,13 +983,249 @@ function openTournament() {
   }
 }
 
+/* ============================ MODE-AWARE CREW SELECT ============================ */
+
+function openSelect(mode) {
+  UI.mode = mode;
+  UI.playerCrew = [];
+  UI.selectedPreset = null;
+  const h2 = document.querySelector('#screen-select .select-header h2');
+  const tabs = document.querySelector('#screen-select .tabs');
+  if (mode === 'doubles') {
+    if (h2) h2.textContent = '⚔️ Assemble Your Duo';
+    if (tabs) tabs.style.display = 'none';
+    $('#preset-grid').style.display = 'none';
+    $('#custom-builder').style.display = 'grid';
+  } else {
+    if (h2) h2.textContent = '⚓ Assemble Your Crew';
+    if (tabs) tabs.style.display = '';
+    $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'preset'));
+    $('#preset-grid').style.display = 'grid';
+    $('#custom-builder').style.display = 'none';
+  }
+  $$('.preset-card').forEach(c => c.classList.remove('selected'));
+  renderCrewSlots();
+  renderRosterPicks();
+  showDetail(CHARACTERS[0].id);
+  updateBattleButton();
+  showScreen('#screen-select');
+}
+
+/* ============================ DOUBLES BATTLE (2v2) ============================ */
+
+function dUnitEl(side, slot) { return document.querySelector(`#screen-doubles .d-unit[data-side="${side}"][data-slot="${slot}"]`); }
+function dFighter(side, slot) { return UI.dbl.battle.sides[side].crew[slot]; }
+
+function startDoublesBattle(playerIds, enemyIds, playerLoadouts) {
+  UI.dbl = {
+    battle: new DoublesBattle(playerIds, enemyIds, { playerLoadouts }),
+    lastCrews: { player: [...playerIds], enemy: [...enemyIds], playerLoadouts },
+    busy: false, pending: [], queue: [], curSlot: null, pendingIdx: null,
+  };
+  $('#d-battle-log').innerHTML = '';
+  $('#d-turn-label').textContent = '2v2 BATTLE';
+  $('#d-prompt').textContent = '';
+  $('#d-moves-grid').innerHTML = '';
+  showScreen('#screen-doubles');
+  for (const side of ['player', 'enemy']) for (let slot = 0; slot < 2; slot++) dRenderUnit(side, slot);
+  dPlayEvents(UI.dbl.battle.events.slice());   // opening events (intimidate, etc.)
+}
+
+function dRenderUnit(side, slot) {
+  const unit = dUnitEl(side, slot);
+  const f = dFighter(side, slot);
+  unit.classList.toggle('fainted-unit', !f || !f.alive);
+  const wrap = unit.querySelector('.sprite-wrap');
+  wrap.classList.remove('fainted-anim');
+  wrap.innerHTML = '';
+  if (f) wrap.appendChild(makeSpriteCanvas(f.def.id, 7, side === 'player'));
+  dRenderCard(side, slot);
+}
+
+function dRenderCard(side, slot) {
+  const f = dFighter(side, slot);
+  const card = dUnitEl(side, slot).querySelector('.d-card');
+  card.innerHTML = `
+    <div class="row1"><span class="fname">${shortName(f.def)}</span><span class="status-chip"></span></div>
+    <div class="types-row">${f.def.types.map(t => typeBadge(t, true)).join('')}</div>
+    <div class="stage-row"></div>
+    <div class="hp-track"><div class="hp-fill"></div></div>
+    <div class="hp-num"></div>`;
+  dUpdateHp(side, slot); dUpdateStatus(side, slot); dUpdateStages(side, slot);
+}
+
+function dUpdateHp(side, slot) {
+  const f = dFighter(side, slot);
+  const fill = dUnitEl(side, slot).querySelector('.hp-fill');
+  const pct = f.maxHp ? (f.hp / f.maxHp) * 100 : 0;
+  fill.style.width = pct + '%';
+  fill.classList.toggle('mid', pct <= 55 && pct > 25);
+  fill.classList.toggle('low', pct <= 25);
+  dUnitEl(side, slot).querySelector('.hp-num').textContent = `${f.hp} / ${f.maxHp}`;
+}
+function dUpdateStatus(side, slot) {
+  const f = dFighter(side, slot);
+  const chip = dUnitEl(side, slot).querySelector('.status-chip');
+  if (f.status) { chip.style.display = 'inline-block'; chip.style.background = STATUS_CHIP_COLORS[f.status] || '#666'; chip.textContent = STATUS_ICONS[f.status]; }
+  else chip.style.display = 'none';
+}
+function dUpdateStages(side, slot) {
+  const f = dFighter(side, slot);
+  const row = dUnitEl(side, slot).querySelector('.stage-row');
+  const chips = [];
+  for (const s of ['atk', 'def', 'spd']) {
+    const v = f.stages[s]; if (!v) continue;
+    const arrows = (v > 0 ? '▲' : '▼').repeat(Math.min(3, Math.abs(v)));
+    chips.push(`<span class="stage-chip ${v > 0 ? 'up' : 'down'}">${STAGE_LABELS[s]} ${arrows}</span>`);
+  }
+  row.innerHTML = chips.join(''); row.style.display = chips.length ? 'flex' : 'none';
+}
+
+function dFloat(side, slot, text, color) {
+  const zone = dUnitEl(side, slot).querySelector('.combatant');
+  const el = document.createElement('div'); el.className = 'float-num'; el.style.color = color; el.textContent = text;
+  zone.appendChild(el); setTimeout(() => el.remove(), 1000);
+}
+function dLog(msg) {
+  const log = $('#d-battle-log');
+  log.querySelectorAll('.latest').forEach(l => l.classList.remove('latest'));
+  const div = document.createElement('div'); div.className = 'logline latest'; div.textContent = msg;
+  log.appendChild(div); log.scrollTop = log.scrollHeight;
+}
+function dSetMovesEnabled(on) { document.querySelectorAll('#d-moves-grid .move-btn').forEach(b => b.disabled = !on); }
+
+async function dPlayEvents(events) {
+  UI.dbl.busy = true;
+  dSetMovesEnabled(false);
+  for (const ev of events) {
+    if (!UI.dbl) return;
+    switch (ev.t) {
+      case 'turnStart': {
+        $('#d-turn-label').textContent = 'TURN ' + ev.n;
+        const sep = document.createElement('div'); sep.className = 'turnsep'; sep.textContent = '— Turn ' + ev.n + ' —';
+        $('#d-battle-log').appendChild(sep); await sleep(110); break;
+      }
+      case 'log': dLog(ev.msg); await sleep(ev.move ? 300 : 360); break;
+      case 'anim': {
+        const wrap = dUnitEl(ev.side, ev.slot) && dUnitEl(ev.side, ev.slot).querySelector('.sprite-wrap');
+        if (!wrap) break;
+        if (ev.kind === 'attack' && !ev.status) { wrap.classList.add('attack-pulse'); setTimeout(() => wrap.classList.remove('attack-pulse'), 400); await sleep(190); }
+        else if (ev.kind === 'protect' || ev.kind === 'blocked') { wrap.classList.add('guard-flash'); setTimeout(() => wrap.classList.remove('guard-flash'), 420); SFX.status(); await sleep(200); }
+        break;
+      }
+      case 'damage': {
+        const wrap = dUnitEl(ev.side, ev.slot).querySelector('.sprite-wrap');
+        wrap.classList.add('shake', 'hit-flash'); setTimeout(() => wrap.classList.remove('shake', 'hit-flash'), 450);
+        const color = ev.crit ? '#ffd24a' : ev.eff > 1 ? '#ff7a5a' : ev.eff < 1 ? '#9fb8d4' : '#ffffff';
+        dFloat(ev.side, ev.slot, '-' + ev.amount, ev.dot ? '#c084fc' : color);
+        if (ev.crit || ev.eff > 1) SFX.superHit(); else if (ev.eff < 1) SFX.weakHit(); else SFX.hit();
+        dUpdateHp(ev.side, ev.slot); await sleep(360); break;
+      }
+      case 'heal': dFloat(ev.side, ev.slot, '+' + ev.amount, '#4ade80'); SFX.heal(); dUpdateHp(ev.side, ev.slot); await sleep(320); break;
+      case 'status': dUpdateStatus(ev.side, ev.slot); if (ev.status) SFX.status(); await sleep(150); break;
+      case 'stat': {
+        const arrow = ev.delta > 0 ? '▲' : '▼';
+        dFloat(ev.side, ev.slot, ev.stat.toUpperCase() + ' ' + arrow.repeat(Math.min(2, Math.abs(ev.delta))), ev.delta > 0 ? '#5eead4' : '#f59e0b');
+        dUpdateStages(ev.side, ev.slot); SFX.status(); await sleep(260); break;
+      }
+      case 'faint': {
+        const unit = dUnitEl(ev.side, ev.slot);
+        unit.querySelector('.sprite-wrap').classList.add('fainted-anim');
+        unit.classList.add('fainted-unit'); SFX.faint(); await sleep(600); break;
+      }
+      case 'end': await sleep(700); dShowResult(ev.winner); return;
+    }
+  }
+  UI.dbl.busy = false;
+  if (UI.dbl && !UI.dbl.battle.over) dStartPlayerInput();
+}
+
+function dStartPlayerInput() {
+  UI.dbl.pending = [];
+  UI.dbl.queue = UI.dbl.battle.livingSlots('player');
+  dNextInput();
+}
+function dNextInput() {
+  dClearTargetable();
+  document.querySelectorAll('#screen-doubles .d-unit.acting').forEach(u => u.classList.remove('acting'));
+  if (!UI.dbl.queue.length) { dResolveRound(); return; }
+  UI.dbl.curSlot = UI.dbl.queue.shift();
+  UI.dbl.pendingIdx = null;
+  UI.dbl.busy = false;
+  const f = dFighter('player', UI.dbl.curSlot);
+  dUnitEl('player', UI.dbl.curSlot).classList.add('acting');
+  $('#d-prompt').textContent = `▶ Choose ${shortName(f.def)}'s move`;
+  dRenderMoves(f);
+}
+function dRenderMoves(f) {
+  const grid = $('#d-moves-grid'); grid.innerHTML = '';
+  const enemies = UI.dbl.battle.livingSlots('enemy');
+  f.moves.forEach((m, i) => {
+    const b = document.createElement('button');
+    b.className = 'move-btn'; b.style.borderLeft = `4px solid ${TYPES[m.type].color}`;
+    let effHint = '';
+    if (m.pow > 0 && enemies.length) {
+      const eff = typeEffectiveness(m.type, dFighter('enemy', enemies[0]).def.types);
+      if (eff === 0) effHint = '<span class="eff-hint zero">✕</span>';
+      else if (eff > 1) effHint = '<span class="eff-hint up">▲▲</span>';
+      else if (eff < 1) effHint = '<span class="eff-hint down">▼</span>';
+    }
+    const fxParts = describeMoveFx(m);
+    b.innerHTML = `<span class="mv-name">${m.name}</span>
+      <span class="mv-meta">${typeBadge(m.type, true)}<span>${m.pow > 0 ? 'PWR ' + m.pow : 'STATUS'}</span><span>ACC ${m.acc}</span>${effHint}</span>
+      ${fxParts.length ? `<span class="mv-fx">${fxParts.join(' · ')}</span>` : ''}`;
+    b.addEventListener('click', () => dPickMove(i));
+    grid.appendChild(b);
+  });
+  dSetMovesEnabled(true);
+}
+function dPickMove(idx) {
+  if (UI.dbl.busy) return;
+  const f = dFighter('player', UI.dbl.curSlot);
+  const mv = f.moves[idx], fx = mv.fx || {};
+  const needsTarget = mv.pow > 0 || fx.enemy || fx.sleep || fx.stun;
+  const enemies = UI.dbl.battle.livingSlots('enemy');
+  if (!needsTarget) return dRecord(idx, null);
+  if (enemies.length <= 1) return dRecord(idx, { side: 'enemy', slot: enemies[0] });
+  UI.dbl.pendingIdx = idx;
+  $('#d-prompt').textContent = `🎯 ${mv.name}: tap the enemy to hit`;
+  dSetMovesEnabled(false);
+  enemies.forEach(slot => {
+    const u = dUnitEl('enemy', slot);
+    u.classList.add('targetable');
+    u._targetHandler = () => dPickTarget(slot);
+    u.addEventListener('click', u._targetHandler);
+  });
+}
+function dPickTarget(slot) { dRecord(UI.dbl.pendingIdx, { side: 'enemy', slot }); }
+function dClearTargetable() {
+  document.querySelectorAll('#screen-doubles .d-unit.targetable').forEach(u => {
+    u.classList.remove('targetable');
+    if (u._targetHandler) { u.removeEventListener('click', u._targetHandler); u._targetHandler = null; }
+  });
+}
+function dRecord(idx, target) {
+  UI.dbl.pending.push({ slot: UI.dbl.curSlot, type: 'move', idx, target });
+  SFX.click();
+  dClearTargetable();
+  dNextInput();
+}
+function dResolveRound() {
+  document.querySelectorAll('#screen-doubles .d-unit.acting').forEach(u => u.classList.remove('acting'));
+  $('#d-prompt').textContent = '';
+  dSetMovesEnabled(false);
+  dPlayEvents(UI.dbl.battle.playRound(UI.dbl.pending));
+}
+function dShowResult(winner) { UI.dbl.busy = false; showResultGeneric(winner, UI.dbl.battle); }
+
 /* ============================ WIRING ============================ */
 
 function initUI() {
   buildSelectScreen();
   buildTypeChart();
 
-  $('#btn-setsail').addEventListener('click', () => { SFX.click(); showScreen('#screen-select'); });
+  $('#btn-setsail').addEventListener('click', () => { SFX.click(); openSelect('single'); });
+  $('#btn-doubles').addEventListener('click', () => { SFX.click(); openSelect('doubles'); });
   $('#btn-tournament').addEventListener('click', () => { SFX.click(); openTournament(); });
   $('#btn-tour-back').addEventListener('click', () => { SFX.click(); showScreen('#screen-title'); });
   $('#btn-tour-run').addEventListener('click', () => { SFX.click(); startTournament(); });
@@ -1008,11 +1252,17 @@ function initUI() {
   }));
 
   $('#btn-battle').addEventListener('click', () => {
-    if (UI.playerCrew.length !== CREW_SIZE) return;
+    if (UI.playerCrew.length !== crewMax()) return;
     if (!UI.playerCrew.every(id => ensureLoadout(id).length === MOVESET_SIZE)) return;
     SFX.click();
     const loadouts = UI.playerCrew.map(id => loadoutMoves(id));
-    startBattle([...UI.playerCrew], pickOpponentCrew(), loadouts);
+    if (UI.mode === 'doubles') startDoublesBattle([...UI.playerCrew], pickOpponentCrew(), loadouts);
+    else startBattle([...UI.playerCrew], pickOpponentCrew(), loadouts);
+  });
+
+  $('#d-btn-forfeit').addEventListener('click', () => {
+    if (UI.dbl && UI.dbl.busy) return;
+    if (confirm('Strike your colors and forfeit this 2v2?')) dShowResult('enemy');
   });
 
   $('#btn-switch').addEventListener('click', () => { if (!UI.busy) { SFX.click(); openSwitchModal(false); } });
@@ -1024,20 +1274,25 @@ function initUI() {
 
   $('#btn-rematch').addEventListener('click', () => {
     SFX.click();
-    if (UI.lastCrews) startBattle([...UI.lastCrews.player], [...UI.lastCrews.enemy], UI.lastCrews.playerLoadouts);
+    if (UI.mode === 'doubles') {
+      const lc = UI.dbl && UI.dbl.lastCrews;
+      if (lc) startDoublesBattle([...lc.player], [...lc.enemy], lc.playerLoadouts);
+    } else if (UI.lastCrews) {
+      startBattle([...UI.lastCrews.player], [...UI.lastCrews.enemy], UI.lastCrews.playerLoadouts);
+    }
   });
-  $('#btn-newcrew').addEventListener('click', () => { SFX.click(); showScreen('#screen-select'); });
+  $('#btn-newcrew').addEventListener('click', () => { SFX.click(); openSelect(UI.mode); });
   $('#btn-result-title').addEventListener('click', () => { SFX.click(); showScreen('#screen-title'); });
 
-  // mute toggle
-  const muteBtn = $('#btn-mute');
-  const syncMute = () => muteBtn.textContent = UI.muted ? '🔇' : '🔊';
+  // mute toggle (shared across both battle screens)
+  const muteBtns = ['#btn-mute', '#d-btn-mute'].map($).filter(Boolean);
+  const syncMute = () => muteBtns.forEach(b => b.textContent = UI.muted ? '🔇' : '🔊');
   syncMute();
-  muteBtn.addEventListener('click', () => {
+  muteBtns.forEach(b => b.addEventListener('click', () => {
     UI.muted = !UI.muted;
     localStorage.setItem('gll-muted', UI.muted ? '1' : '0');
     syncMute();
-  });
+  }));
 }
 
 document.addEventListener('DOMContentLoaded', initUI);

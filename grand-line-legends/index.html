@@ -19,6 +19,7 @@
     <p class="tagline">Assemble your pirate crew. Master 16 powers of the sea. Conquer the Grand Line.</p>
     <div class="title-actions">
       <button id="btn-setsail" class="btn btn-gold btn-big">⚓ Set Sail</button>
+      <button id="btn-doubles" class="btn btn-ghost btn-big">⚔️ 2v2 Doubles</button>
       <button id="btn-tournament" class="btn btn-ghost btn-big">🏆 Tournament</button>
       <button id="btn-library" class="btn btn-ghost btn-big">📖 Library</button>
       <button id="btn-typechart" class="btn btn-ghost btn-big">📜 Type Chart</button>
@@ -93,6 +94,48 @@
         <div class="action-row">
           <button id="btn-switch" class="btn">🔄 Crew</button>
           <button id="btn-forfeit" class="btn btn-danger">🏳️ Forfeit</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== DOUBLES BATTLE (2v2) ==================== -->
+  <section id="screen-doubles" class="screen">
+    <div class="battle-header">
+      <div class="turn-label" id="d-turn-label">2v2 BATTLE</div>
+      <button id="d-btn-mute" class="btn" style="padding:5px 11px">🔊</button>
+    </div>
+
+    <div class="d-arena">
+      <div class="d-row enemy">
+        <div class="d-unit" data-side="enemy" data-slot="0">
+          <div class="info-card d-card"></div>
+          <div class="combatant"><div class="sprite-wrap"></div></div>
+        </div>
+        <div class="d-unit" data-side="enemy" data-slot="1">
+          <div class="info-card d-card"></div>
+          <div class="combatant"><div class="sprite-wrap"></div></div>
+        </div>
+      </div>
+      <div class="d-row player">
+        <div class="d-unit" data-side="player" data-slot="0">
+          <div class="combatant"><div class="sprite-wrap"></div></div>
+          <div class="info-card d-card"></div>
+        </div>
+        <div class="d-unit" data-side="player" data-slot="1">
+          <div class="combatant"><div class="sprite-wrap"></div></div>
+          <div class="info-card d-card"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="battle-bottom">
+      <div id="d-battle-log"></div>
+      <div id="d-action-panel">
+        <div id="d-prompt" class="d-prompt"></div>
+        <div id="d-moves-grid" class="moves-grid"></div>
+        <div class="action-row">
+          <button id="d-btn-forfeit" class="btn btn-danger">🏳️ Forfeit</button>
         </div>
       </div>
     </div>
