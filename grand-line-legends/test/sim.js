@@ -28,8 +28,8 @@ let statusMoveCount = 0;
 for (const c of CHARACTERS) {
   check(c.types.every(t => TYPES[t]), `${c.id}: valid types`);
   check(c.moves.length >= 6, `${c.id}: has an expanded movepool (got ${c.moves.length})`);
-  check(c.moves[c.moves.length - 1].name === 'Protect', `${c.id}: pool ends with Protect`);
   check(c.moves.some(m => m.fx && m.fx.protect), `${c.id}: pool contains a Protect move`);
+  check(c.moves.slice(0, 4).every(m => !m.doubles), `${c.id}: default loadout has no doubles-only moves`);
   abilityNames.add(c.ability.name);
   for (const m of c.moves) {
     check(TYPES[m.type] !== undefined, `${c.id}/${m.name}: valid move type ${m.type}`);
@@ -208,6 +208,70 @@ for (let i = 0; i < CHARACTERS.length; i++) {
   check(statEvt, 'doubles emits stat-stage events');
   check(benchUsed, 'doubles uses the bench (replacements happen)');
   console.log(`\ndoubles: ${dFinished}/200 finished, avg turns ${(dTurns / dFinished).toFixed(1)}`);
+}
+
+/* ---- 2v2 move mechanics (deterministic: every roll connects) ---- */
+{
+  const CB = sandbox.CHAR_BY_ID, DB = sandbox.DoublesBattle;
+  const find = (id, pred) => CB[id].moves.find(pred);
+  const R = Math.random; Math.random = () => 0;
+  try {
+    // spread hits BOTH foes
+    const sp = find('enel', m => m.fx && m.fx.spread);
+    const b = new DB(['enel', 'zoro'], ['nami', 'usopp']);
+    const e0 = b.fighterAt('enemy', 0), e1 = b.fighterAt('enemy', 1);
+    const h0 = e0.hp, h1 = e1.hp;
+    b.resolveMove('player', 0, sp, 'enemy', 0);
+    check(e0.hp < h0 && e1.hp < h1, 'spread move damages BOTH foes');
+
+    // team rally raises both allies
+    const tw = find('nami', m => m.fx && m.fx.team);
+    const b2 = new DB(['nami', 'zoro'], ['usopp', 'buggy']);
+    b2.resolveMove('player', 0, tw, 'enemy', 0);
+    check(b2.fighterAt('player', 0).stages.spd > 0 && b2.fighterAt('player', 1).stages.spd > 0, 'team buff raises BOTH allies');
+
+    // ally heal restores the partner, not the user
+    const ch = find('chopper', m => m.fx && m.fx.allyHeal);
+    const b3 = new DB(['chopper', 'zoro'], ['usopp', 'buggy']);
+    b3.fighterAt('player', 1).hp = 40;
+    b3.resolveMove('player', 0, ch, 'enemy', 0);
+    check(b3.fighterAt('player', 1).hp > 40, 'ally heal restores partner HP');
+
+    // redirect marks the redirector as the draw
+    const jr = find('jinbe', m => m.fx && m.fx.redirect);
+    const b4 = new DB(['jinbe', 'nami'], ['zoro', 'usopp']);
+    b4.resolveMove('player', 0, jr, 'enemy', 0);
+    check(b4.sides.player.redirect === 0, 'redirect flag set on the redirector');
+    // and a single-target enemy attack is pulled onto the redirector in a full round
+    const b5 = new DB(['jinbe', 'nami'], ['zoro', 'usopp']);
+    const namiHp = b5.fighterAt('player', 1).hp;
+    b5.playRound([{ pos: 0, type: 'move', idx: jr === b5.fighterAt('player', 0).moves[0] ? 0 : b5.fighterAt('player', 0).moves.findIndex(m => m.fx && m.fx.redirect), target: null },
+                  { pos: 1, type: 'move', idx: 0, target: { side: 'enemy', pos: 0 } }]);
+    check(b5.fighterAt('player', 1).hp === namiHp || !b5.fighterAt('player', 1), 'redirect shields the partner from single-target hits');
+  } finally { Math.random = R; }
+}
+
+/* ---- 2v2 balance audit: no runaway, no dead weight ---- */
+{
+  const DB = sandbox.DoublesBattle, dids = CHARACTERS.map(c => c.id);
+  const dwins = {}, dgames = {}; dids.forEach(id => { dwins[id] = 0; dgames[id] = 0; });
+  function dteam() { const p = [...dids], t = []; for (let i = 0; i < 4; i++) t.push(p.splice(Math.floor(Math.random() * p.length), 1)[0]); return t; }
+  for (let i = 0; i < 1500; i++) {
+    const A = dteam(), Bt = dteam(), b = new DB(A, Bt);
+    let g = 0;
+    while (!b.over && g < 300) {
+      g++;
+      if (b.awaiting) { for (const pos of b.awaiting.positions.slice()) { if (!b.awaiting) break; const bn = b.benchIndices('player'); if (bn.length) b.submitReplace(pos, bn[0]); } if (b.awaiting) break; continue; }
+      b.playRound(b.livingPositions('player').map(pos => ({ pos, ...b.chooseAI('player', pos) })));
+    }
+    const w = b.winner === 'player' ? A : b.winner === 'enemy' ? Bt : null;
+    for (const id of A) dgames[id]++; for (const id of Bt) dgames[id]++;
+    if (w) for (const id of w) dwins[id]++;
+  }
+  const dwr = dids.map(id => dwins[id] / Math.max(1, dgames[id])).sort((a, b) => b - a);
+  console.log(`2v2 meta: top ${(dwr[0] * 100).toFixed(0)}%  bottom ${(dwr[dwr.length - 1] * 100).toFixed(0)}%`);
+  check(dwr[0] <= 0.80, `2v2 has no runaway pick (top ${(dwr[0] * 100).toFixed(0)}%)`);
+  check(dwr[dwr.length - 1] >= 0.28, `2v2 has no dead weight (bottom ${(dwr[dwr.length - 1] * 100).toFixed(0)}%)`);
 }
 
 /* ---- stat stages persist across a switch (single battle) ---- */

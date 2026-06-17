@@ -369,6 +369,7 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 400; letter-spacing:
 .bench-chip.dead { opacity: 0.32; filter: grayscale(1); }
 .d-switch-btn { min-height: 0; }
 .d-switch-btn .mv-meta { color: #9fb8d4; }
+.dbl-tag { color: var(--gold); font-weight: 800; font-size: 11px; }
 .d-bench-card { display: flex; align-items: center; gap: 10px; }
 .d-bench-card .bench-info { display: flex; flex-direction: column; gap: 3px; }
 .d-bench-card .mv-meta { gap: 5px; }

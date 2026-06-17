@@ -26,6 +26,21 @@ function resolveLoadout(charDef, loadout) {
   return moves.length ? moves : charDef.moves.slice(0, 4);
 }
 
+/* A doubles-flavoured default loadout: the signature kit with the fighter's
+   doubles move(s) swapped in over the lowest-power signature slot, so the AI
+   actually uses spread/support tools in 2v2. */
+function doublesLoadout(charDef) {
+  const set = charDef.moves.slice(0, 4);
+  const doubles = charDef.moves.filter(m => m.doubles);
+  for (const dm of doubles) {
+    if (set.includes(dm)) continue;
+    let wi = 0, wv = Infinity;
+    set.forEach((m, i) => { const v = m.pow || 0; if (v < wv) { wv = v; wi = i; } });
+    set[wi] = dm;
+  }
+  return set;
+}
+
 class Fighter {
   constructor(charDef, loadout) {
     this.def = charDef;
@@ -301,6 +316,12 @@ class Battle {
       if (fx.self) for (const [stat, d] of Object.entries(fx.self)) {
         if (this.changeStage(userKey, stat, d)) this.emit({ t: 'log', msg: `📈 ${user.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}${Math.abs(d) > 1 ? ' sharply' : ''}!` });
       }
+      // doubles-only effects degrade gracefully in 1v1 (no partner): apply to self
+      if (fx.team) for (const [stat, d] of Object.entries(fx.team))
+        if (this.changeStage(userKey, stat, d)) this.emit({ t: 'log', msg: `📣 ${user.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}!` });
+      if (fx.allyHeal) { const h = Math.min(Math.floor(user.maxHp * fx.allyHeal / 100), user.maxHp - user.hp); if (h > 0) { user.hp += h; this.emit({ t: 'heal', side: userKey, amount: h, hp: user.hp }); this.emit({ t: 'log', msg: `💚 ${user.name} recovered ${h} HP!` }); } }
+      if (fx.allyBuff) for (const [stat, d] of Object.entries(fx.allyBuff))
+        if (this.changeStage(userKey, stat, d)) this.emit({ t: 'log', msg: `📈 ${user.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}!` });
       if (fx.enemy || fx.sleep || fx.stun) {
         if (!target.alive) { this.emit({ t: 'log', msg: 'But there was no target...' }); return; }
         if (target.protecting) { this.emit({ t: 'log', msg: `🛡️ ${target.name}'s guard holds firm!` }); return; }
@@ -824,9 +845,10 @@ const DOUBLES_ACTIVE = 2;
 class DoublesBattle {
   constructor(playerIds, enemyIds, opts = {}) {
     const pL = opts.playerLoadouts || [], eL = opts.enemyLoadouts || [];
+    const make = (id, lo) => new Fighter(CHAR_BY_ID[id], lo || doublesLoadout(CHAR_BY_ID[id]));
     this.sides = {
-      player: { crew: playerIds.map((id, i) => new Fighter(CHAR_BY_ID[id], pL[i])), field: [], isAI: false },
-      enemy: { crew: enemyIds.map((id, i) => new Fighter(CHAR_BY_ID[id], eL[i])), field: [], isAI: true },
+      player: { crew: playerIds.map((id, i) => make(id, pL[i])), field: [], redirect: null, isAI: false },
+      enemy: { crew: enemyIds.map((id, i) => make(id, eL[i])), field: [], redirect: null, isAI: true },
     };
     for (const sk of ['player', 'enemy']) {
       const s = this.sides[sk];
@@ -851,6 +873,7 @@ class DoublesBattle {
   livingPositions(sk) { const r = []; for (let pos = 0; pos < DOUBLES_ACTIVE; pos++) { const f = this.fighterAt(sk, pos); if (f && f.alive) r.push(pos); } return r; }
   benchIndices(sk) { const s = this.sides[sk]; return s.crew.map((f, i) => i).filter(i => s.crew[i].alive && !s.field.includes(i)); }
   oppActives(sk) { const o = this.other(sk); return this.livingPositions(o).map(pos => ({ pos, f: this.fighterAt(o, pos) })); }
+  partnerPos(sk, pos) { const other = pos === 0 ? 1 : 0; const f = this.fighterAt(sk, other); return f && f.alive ? other : null; }
   crewAlive(sk) { return this.sides[sk].crew.some(f => f.alive); }
 
   abilityOf(sk, pos) {
@@ -983,6 +1006,22 @@ class DoublesBattle {
       }
       if (fx.self) for (const [stat, d] of Object.entries(fx.self))
         if (this.changeStage(uSk, uPos, stat, d)) this.emit({ t: 'log', msg: `📈 ${user.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}${Math.abs(d) > 1 ? ' sharply' : ''}!` });
+      // team rally: buff both front-liners on the user's side
+      if (fx.team) for (const pos of this.livingPositions(uSk)) for (const [stat, d] of Object.entries(fx.team))
+        if (this.changeStage(uSk, pos, stat, d)) this.emit({ t: 'log', msg: `📣 ${this.fighterAt(uSk, pos).name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}${Math.abs(d) > 1 ? ' sharply' : ''}!` });
+      // partner support: heal / buff the ally
+      if (fx.allyHeal || fx.allyBuff) {
+        const ap = this.partnerPos(uSk, uPos);
+        if (ap == null) { this.emit({ t: 'log', msg: `…but there's no partner to help!` }); }
+        else {
+          const ally = this.fighterAt(uSk, ap);
+          if (fx.allyHeal) { const h = Math.min(Math.floor(ally.maxHp * fx.allyHeal / 100), ally.maxHp - ally.hp); ally.hp += h; this.emit({ t: 'heal', side: uSk, slot: ap, amount: h, hp: ally.hp }); this.emit({ t: 'log', msg: `💞 ${user.name} mends ${ally.name} for ${h} HP!` }); }
+          if (fx.allyBuff) for (const [stat, d] of Object.entries(fx.allyBuff))
+            if (this.changeStage(uSk, ap, stat, d)) this.emit({ t: 'log', msg: `📈 ${ally.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}${Math.abs(d) > 1 ? ' sharply' : ''}!` });
+        }
+      }
+      // redirect: draw the foes' single-target attacks onto this fighter
+      if (fx.redirect) { this.sides[uSk].redirect = uPos; this.emit({ t: 'log', msg: `🌀 ${user.name} draws the enemy's attacks!` }); }
       if (fx.enemy || fx.sleep || fx.stun) {
         if (!target || !target.alive) { this.emit({ t: 'log', msg: 'But there was no target...' }); return; }
         if (target.protecting) { this.emit({ t: 'log', msg: `🛡️ ${target.name}'s guard holds firm!` }); return; }
@@ -997,89 +1036,101 @@ class DoublesBattle {
       return;
     }
 
-    if (!target || !target.alive) { this.emit({ t: 'log', msg: 'But there was no target...' }); return; }
-    if (target.protecting) { this.emit({ t: 'anim', kind: 'blocked', side: tSk, slot: tPos }); this.emit({ t: 'log', msg: `🛡️ ${target.name}'s guard blocked the attack!` }); return; }
-    if (targetAb && targetAb.kind === 'immuneType' && targetAb.type === mv.type) { this.emit({ t: 'log', msg: `🤡 It passed right through — ${target.name}'s ${targetAb.name}!` }); return; }
-    if (targetAb && targetAb.kind === 'dodge' && chance(targetAb.chance)) { this.emit({ t: 'log', msg: `💨 ${target.name} dodged — ${targetAb.name}!` }); return; }
-    const neverMiss = (userAb && userAb.kind === 'neverMiss') || fx.neverMiss;
-    if (!neverMiss && !chance(mv.acc)) { this.emit({ t: 'log', msg: `💨 ${user.name}'s attack missed!` }); return; }
+    // target list: spread hits every living foe (0.75x with two), else the chosen one
+    const targets = fx.spread ? this.oppActives(uSk).map(o => [this.other(uSk), o.pos]) : [[tSk, tPos]];
+    if (!targets.length || !this.fighterAt(targets[0][0], targets[0][1])) { this.emit({ t: 'log', msg: 'But there was no target...' }); return; }
+    const spreadFactor = (fx.spread && targets.length > 1) ? 0.75 : 1;
+    let grandTotal = 0;
 
-    let eff = typeEffectiveness(mv.type, target.def.types);
-    if (eff > 0 && eff < 1 && userAb && userAb.kind === 'pierce') { eff = 1; this.emit({ t: 'log', msg: `👑 ${user.name}'s supreme Haki cuts through the resistance!` }); }
-    if (eff === 0) { this.emit({ t: 'log', msg: `🛡️ It doesn't affect ${target.name} at all!` }); return; }
+    for (const [tk, tp] of targets) {
+      const tgt = this.fighterAt(tk, tp);
+      if (!tgt || !tgt.alive) continue;
+      const tAb = this.abilityOf(tk, tp);
+      if (tgt.protecting) { this.emit({ t: 'anim', kind: 'blocked', side: tk, slot: tp }); this.emit({ t: 'log', msg: `🛡️ ${tgt.name}'s guard blocked the attack!` }); continue; }
+      if (tAb && tAb.kind === 'immuneType' && tAb.type === mv.type) { this.emit({ t: 'log', msg: `🤡 It passed right through — ${tgt.name}'s ${tAb.name}!` }); continue; }
+      if (tAb && tAb.kind === 'dodge' && chance(tAb.chance)) { this.emit({ t: 'log', msg: `💨 ${tgt.name} dodged — ${tAb.name}!` }); continue; }
+      const neverMiss = (userAb && userAb.kind === 'neverMiss') || fx.neverMiss;
+      if (!neverMiss && !chance(mv.acc)) { this.emit({ t: 'log', msg: `💨 ${user.name}'s attack missed ${tgt.name}!` }); continue; }
 
-    const nHits = fx.multi ? randInt(fx.multi[0], fx.multi[1]) : 1;
-    let totalDmg = 0, landedCrit = false;
-    for (let h = 0; h < nHits; h++) {
-      if (!target.alive) break;
-      let critCh = 6.25 + (fx.critBoost || 0), critMult = 1.5;
-      if (userAb && userAb.kind === 'critChance') critCh += userAb.bonus;
-      if (userAb && userAb.kind === 'superCrit') { critCh += userAb.bonus; critMult = userAb.mult; }
-      const isCrit = chance(critCh);
-      if (isCrit) landedCrit = true;
-      const A = this.effAtk(user, userAb);
-      const ignoreBuffs = (userAb && userAb.kind === 'ignoreBuffs');
-      const D = fx.ignoreDef ? target.baseDef : this.effDef(target, ignoreBuffs);
-      let dmg = ((2 * LEVEL / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
-      if (user.def.types.includes(mv.type)) dmg *= 1.5;
-      dmg *= eff;
-      if (isCrit) dmg *= critMult;
-      dmg *= 0.85 + rngFloat() * 0.15;
-      if (userAb && userAb.kind === 'typeBoost' && userAb.type === mv.type) dmg *= userAb.mult;
-      if (userAb && userAb.kind === 'executioner' && target.hp <= target.maxHp / 2) dmg *= userAb.mult;
-      if (userAb && userAb.kind === 'transform' && user.hp <= user.maxHp / 2) dmg *= userAb.out;
-      if (targetAb && targetAb.kind === 'armorTypes' && targetAb.types.includes(mv.type)) dmg *= targetAb.mult;
-      if (targetAb && targetAb.kind === 'scales' && target.hp > target.maxHp / 2) dmg *= targetAb.mult;
-      if (targetAb && targetAb.kind === 'transform' && target.hp <= target.maxHp / 2) dmg *= targetAb.in;
-      if (target.def.ability.kind === 'nullify') dmg *= target.def.ability.dmgIn;
-      dmg = Math.max(1, Math.floor(dmg));
-      const survAb = targetAb && targetAb.kind === 'survive';
-      if (survAb && !target.usedSurvive && dmg >= target.hp) { dmg = target.hp - 1; target.usedSurvive = true; this.emit({ t: 'log', msg: `🌙 ${target.name} refuses to fall — ${targetAb.name}!` }); }
-      target.hp = Math.max(0, target.hp - dmg);
-      totalDmg += dmg;
-      this.emit({ t: 'damage', side: tSk, slot: tPos, amount: dmg, hp: target.hp, eff, crit: isCrit, moveType: mv.type });
+      let eff = typeEffectiveness(mv.type, tgt.def.types);
+      if (eff > 0 && eff < 1 && userAb && userAb.kind === 'pierce') { eff = 1; this.emit({ t: 'log', msg: `👑 ${user.name}'s supreme Haki cuts through the resistance!` }); }
+      if (eff === 0) { this.emit({ t: 'log', msg: `🛡️ It doesn't affect ${tgt.name} at all!` }); continue; }
+
+      const nHits = fx.multi ? randInt(fx.multi[0], fx.multi[1]) : 1;
+      let dealt = 0, landedCrit = false;
+      for (let h = 0; h < nHits; h++) {
+        if (!tgt.alive) break;
+        let critCh = 6.25 + (fx.critBoost || 0), critMult = 1.5;
+        if (userAb && userAb.kind === 'critChance') critCh += userAb.bonus;
+        if (userAb && userAb.kind === 'superCrit') { critCh += userAb.bonus; critMult = userAb.mult; }
+        const isCrit = chance(critCh);
+        if (isCrit) landedCrit = true;
+        const A = this.effAtk(user, userAb);
+        const ignoreBuffs = (userAb && userAb.kind === 'ignoreBuffs');
+        const D = fx.ignoreDef ? tgt.baseDef : this.effDef(tgt, ignoreBuffs);
+        let dmg = ((2 * LEVEL / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
+        if (user.def.types.includes(mv.type)) dmg *= 1.5;
+        dmg *= eff;
+        if (isCrit) dmg *= critMult;
+        dmg *= 0.85 + rngFloat() * 0.15;
+        dmg *= spreadFactor;
+        if (userAb && userAb.kind === 'typeBoost' && userAb.type === mv.type) dmg *= userAb.mult;
+        if (userAb && userAb.kind === 'executioner' && tgt.hp <= tgt.maxHp / 2) dmg *= userAb.mult;
+        if (userAb && userAb.kind === 'transform' && user.hp <= user.maxHp / 2) dmg *= userAb.out;
+        if (tAb && tAb.kind === 'armorTypes' && tAb.types.includes(mv.type)) dmg *= tAb.mult;
+        if (tAb && tAb.kind === 'scales' && tgt.hp > tgt.maxHp / 2) dmg *= tAb.mult;
+        if (tAb && tAb.kind === 'transform' && tgt.hp <= tgt.maxHp / 2) dmg *= tAb.in;
+        if (tgt.def.ability.kind === 'nullify') dmg *= tgt.def.ability.dmgIn;
+        dmg = Math.max(1, Math.floor(dmg));
+        const survAb = tAb && tAb.kind === 'survive';
+        if (survAb && !tgt.usedSurvive && dmg >= tgt.hp) { dmg = tgt.hp - 1; tgt.usedSurvive = true; this.emit({ t: 'log', msg: `🌙 ${tgt.name} refuses to fall — ${tAb.name}!` }); }
+        tgt.hp = Math.max(0, tgt.hp - dmg);
+        dealt += dmg; grandTotal += dmg;
+        this.emit({ t: 'damage', side: tk, slot: tp, amount: dmg, hp: tgt.hp, eff, crit: isCrit, moveType: mv.type });
+      }
+      if (nHits > 1) this.emit({ t: 'log', msg: `🌀 Hit ${nHits} times!` });
+      if (landedCrit) this.emit({ t: 'log', msg: `💥 A critical hit!` });
+      if (eff > 1) this.emit({ t: 'log', msg: `🔥 Super effective on ${tgt.name}!` });
+      else if (eff < 1) this.emit({ t: 'log', msg: `🌫️ Not very effective on ${tgt.name}...` });
+
+      if (dealt > 0 && tgt.alive) {
+        let burnCh = (fx.burn || 0);
+        if (userAb && userAb.kind === 'bonusBurn') burnCh += userAb.chance;
+        if (burnCh && chance(burnCh)) this.applyStatus(tk, tp, 'burn');
+        if (fx.poison && chance(fx.poison)) this.applyStatus(tk, tp, 'poison');
+        if (fx.para && chance(fx.para)) this.applyStatus(tk, tp, 'para');
+        if (fx.freeze && chance(fx.freeze)) this.applyStatus(tk, tp, 'freeze');
+        if (fx.sleep && chance(fx.sleep)) this.applyStatus(tk, tp, 'sleep');
+        let stunCh = (fx.stun || 0);
+        if (userAb && userAb.kind === 'bonusStun') stunCh += userAb.chance;
+        if (stunCh && chance(stunCh)) this.applyStun(tk, tp);
+        if (fx.enemy && chance(fx.enemyChance !== undefined ? fx.enemyChance : 100))
+          for (const [stat, d] of Object.entries(fx.enemy))
+            if (this.changeStage(tk, tp, stat, d)) this.emit({ t: 'log', msg: `📉 ${tgt.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}!` });
+        if (tAb && tAb.kind === 'thorns' && user.alive && chance(tAb.chance)) {
+          if (tAb.status === 'stun') this.applyStun(uSk, uPos, `💘 ${tAb.name}!`);
+          else this.applyStatus(uSk, uPos, tAb.status, `${tAb.name}!`);
+        }
+      }
+      if (mv.type === 'FLAME' && tgt.status === 'freeze') { tgt.status = null; this.emit({ t: 'status', side: tk, slot: tp, status: null }); this.emit({ t: 'log', msg: `💧 The ice around ${tgt.name} melted!` }); }
     }
-    if (nHits > 1) this.emit({ t: 'log', msg: `🌀 Hit ${nHits} times!` });
-    if (landedCrit) this.emit({ t: 'log', msg: `💥 A critical hit!` });
-    if (eff > 1) this.emit({ t: 'log', msg: `🔥 It's super effective!` });
-    else if (eff < 1) this.emit({ t: 'log', msg: `🌫️ It's not very effective...` });
 
-    if (totalDmg > 0) {
+    // once per move: drain / recoil / the user's own stat changes
+    if (grandTotal > 0) {
       let drainFrac = (fx.drain || 0) / 100;
       if (userAb && userAb.kind === 'lifesteal') drainFrac = Math.max(drainFrac, userAb.frac);
       if (drainFrac > 0 && user.alive) {
-        const healed = Math.min(Math.max(1, Math.floor(totalDmg * drainFrac)), user.maxHp - user.hp);
+        const healed = Math.min(Math.max(1, Math.floor(grandTotal * drainFrac)), user.maxHp - user.hp);
         if (healed > 0) { user.hp += healed; this.emit({ t: 'heal', side: uSk, slot: uPos, amount: healed, hp: user.hp }); this.emit({ t: 'log', msg: `🩸 ${user.name} drained ${healed} HP!` }); }
       }
       if (fx.recoil && user.alive) {
-        const rec = Math.max(1, Math.floor(totalDmg * fx.recoil / 100));
+        const rec = Math.max(1, Math.floor(grandTotal * fx.recoil / 100));
         user.hp = Math.max(0, user.hp - rec);
         this.emit({ t: 'damage', side: uSk, slot: uPos, amount: rec, hp: user.hp, eff: 1, crit: false, recoil: true });
         this.emit({ t: 'log', msg: `💢 ${user.name} is hit with recoil!` });
       }
-      if (target.alive) {
-        let burnCh = (fx.burn || 0);
-        if (userAb && userAb.kind === 'bonusBurn') burnCh += userAb.chance;
-        if (burnCh && chance(burnCh)) this.applyStatus(tSk, tPos, 'burn');
-        if (fx.poison && chance(fx.poison)) this.applyStatus(tSk, tPos, 'poison');
-        if (fx.para && chance(fx.para)) this.applyStatus(tSk, tPos, 'para');
-        if (fx.freeze && chance(fx.freeze)) this.applyStatus(tSk, tPos, 'freeze');
-        if (fx.sleep && chance(fx.sleep)) this.applyStatus(tSk, tPos, 'sleep');
-        let stunCh = (fx.stun || 0);
-        if (userAb && userAb.kind === 'bonusStun') stunCh += userAb.chance;
-        if (stunCh && chance(stunCh)) this.applyStun(tSk, tPos);
-        if (fx.enemy && chance(fx.enemyChance !== undefined ? fx.enemyChance : 100))
-          for (const [stat, d] of Object.entries(fx.enemy))
-            if (this.changeStage(tSk, tPos, stat, d)) this.emit({ t: 'log', msg: `📉 ${target.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}!` });
-        if (fx.self)
-          for (const [stat, d] of Object.entries(fx.self))
-            if (this.changeStage(uSk, uPos, stat, d)) this.emit({ t: 'log', msg: `${d > 0 ? '📈' : '📉'} ${user.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}!` });
-        if (targetAb && targetAb.kind === 'thorns' && user.alive && chance(targetAb.chance)) {
-          if (targetAb.status === 'stun') this.applyStun(uSk, uPos, `💘 ${targetAb.name}!`);
-          else this.applyStatus(uSk, uPos, targetAb.status, `${targetAb.name}!`);
-        }
-      }
-      if (mv.type === 'FLAME' && target.status === 'freeze') { target.status = null; this.emit({ t: 'status', side: tSk, slot: tPos, status: null }); this.emit({ t: 'log', msg: `💧 The ice around ${target.name} melted!` }); }
+      if (fx.self && user.alive) for (const [stat, d] of Object.entries(fx.self))
+        if (this.changeStage(uSk, uPos, stat, d)) this.emit({ t: 'log', msg: `${d > 0 ? '📈' : '📉'} ${user.name}'s ${statLabel(stat)} ${d > 0 ? 'rose' : 'fell'}!` });
     }
   }
 
@@ -1105,7 +1156,7 @@ class DoublesBattle {
         if (healed > 0) { f.hp += healed; this.emit({ t: 'heal', side: sk, slot: pos, amount: healed, hp: f.hp }); this.emit({ t: 'log', msg: `🔵 ${f.name} regenerates ${healed} HP — ${ab.name}!` }); }
       }
     }
-    for (const sk of ['player', 'enemy']) this.sides[sk].crew.forEach(f => { if (f) f.protecting = false; });
+    for (const sk of ['player', 'enemy']) { this.sides[sk].crew.forEach(f => { if (f) f.protecting = false; }); this.sides[sk].redirect = null; }
     this.checkFaints();
   }
 
@@ -1229,9 +1280,21 @@ class DoublesBattle {
     if (!opps.length) return { type: 'move', idx: 0, target: null };
     let best = { score: -1, idx: 0, target: { side: oSide, pos: opps[0].pos } };
     const consider = (sc, idx, p) => { if (sc > best.score) best = { score: sc, idx, target: { side: oSide, pos: p } }; };
+    const partner = this.partnerPos(sk, pos);
     for (let i = 0; i < me.moves.length; i++) {
       const mv = me.moves[i], fx = mv.fx || {};
-      if (mv.pow > 0) {
+      if (mv.pow > 0 && fx.spread) {
+        // spread: value is the summed (capped) damage across every foe
+        const factor = opps.length > 1 ? 0.75 : 1;
+        let sc = 0;
+        for (const o of opps) {
+          const dAb = this.abilityOf(oSide, o.pos);
+          const raw = this.estDamage(me, o.f, mv, myAb, dAb) * factor;
+          sc += Math.min(raw, o.f.hp) * this.hitChance(mv, myAb, dAb);
+          if (raw >= o.f.hp) sc += 35;
+        }
+        consider(sc, i, opps[0].pos);
+      } else if (mv.pow > 0) {
         for (const o of opps) {
           const dAb = this.abilityOf(oSide, o.pos);
           const raw = this.estDamage(me, o.f, mv, myAb, dAb);
@@ -1246,6 +1309,14 @@ class DoublesBattle {
         if (fx.heal && me.hp < me.maxHp * 0.6) sc = Math.max(sc, Math.min(Math.floor(me.maxHp * fx.heal / 100), me.maxHp - me.hp) * 0.6);
         if (fx.self) sc = Math.max(sc, 16);
         if (fx.protect) sc = Math.max(sc, 9 / (me.protectStreak + 1));
+        if (fx.team) sc = Math.max(sc, this.livingPositions(sk).length > 1 ? 30 : 14);
+        if ((fx.allyHeal || fx.allyBuff) && partner != null) {
+          const ally = this.fighterAt(sk, partner);
+          let v = fx.allyBuff ? 18 : 0;
+          if (fx.allyHeal) v = Math.max(v, (ally.maxHp - ally.hp) * (fx.allyHeal / 100) * 0.7);
+          sc = Math.max(sc, v);
+        }
+        if (fx.redirect && partner != null) sc = Math.max(sc, 10);
         if ((fx.sleep || fx.stun) && !tgt.f.status && !tgt.f.stunned) sc = Math.max(sc, 26);
         if (fx.enemy) sc = Math.max(sc, 18);
         consider(sc, i, tgt.pos);
@@ -1291,6 +1362,12 @@ class DoublesBattle {
       if (!this.fighterAt(tSk, tPos) || !this.fighterAt(tSk, tPos).alive) {
         const liv = this.livingPositions(this.other(m.sk));
         if (liv.length) { tSk = this.other(m.sk); tPos = liv[0]; }
+      }
+      // redirection: a single-target attack on a side with a live redirector is pulled onto it
+      const fxm = m.mv.fx || {};
+      if (m.mv.pow > 0 && !fxm.spread) {
+        const rp = this.sides[tSk] && this.sides[tSk].redirect;
+        if (rp != null && this.fighterAt(tSk, rp) && this.fighterAt(tSk, rp).alive) tPos = rp;
       }
       this.resolveMove(m.sk, m.pos, m.mv, tSk, tPos);
       this.checkFaints();

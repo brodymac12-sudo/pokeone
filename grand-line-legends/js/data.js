@@ -530,9 +530,47 @@ const EXTRA_MOVES = {
 /* Universal tactical move available to every fighter. */
 const PROTECT_MOVE = { name: 'Protect', type: 'HAKI', pow: 0, acc: 100, prio: 4, fx: { protect: true } };
 
+/* ---- Doubles (2v2) moves ----
+   Tagged `doubles: true` and appended after Protect, so they sit late in the
+   pool: the default loadout (first 4 = signature moves) is unchanged, and the
+   single-battle/tournament balance is untouched. The crew builder only offers
+   these in 2v2 mode, and the doubles AI builds doubles-aware loadouts. They
+   define the 2v2 meta:
+     • spread  — strikes BOTH foes (0.75x with two targets)
+     • team    — rallies your whole side (speed/attack control)
+     • allyHeal/allyBuff — support your partner
+     • redirect — draw the foes' single-target attacks onto a tank */
+const DOUBLES_MOVES = {
+  // spread attackers
+  enel:       [{ name: 'Mamaragan Deluge', type: 'LIGHTNING', pow: 90, acc: 90, doubles: true, fx: { spread: true, para: 20 } }],
+  akainu:     [{ name: 'Meteor Volcano Rain', type: 'FLAME', pow: 90, acc: 90, doubles: true, fx: { spread: true, burn: 20 } }],
+  aokiji:     [{ name: 'Ice Age: Glacial Sweep', type: 'ICE', pow: 85, acc: 90, doubles: true, fx: { spread: true, freeze: 10 } }],
+  kizaru:     [{ name: 'Yasakani Barrage', type: 'LIGHT', pow: 90, acc: 90, doubles: true, fx: { spread: true } }],
+  whitebeard: [{ name: 'Seaquake Shockwave', type: 'TREMOR', pow: 95, acc: 90, doubles: true, fx: { spread: true, enemy: { def: -1 }, enemyChance: 20 } }],
+  bigmom:     [{ name: 'Indra Thunderclap', type: 'LIGHTNING', pow: 90, acc: 90, doubles: true, fx: { spread: true, para: 10 } }],
+  magellan:   [{ name: 'Venom Fog', type: 'POISON', pow: 70, acc: 95, doubles: true, fx: { spread: true, poison: 30 } }],
+  crocodile:  [{ name: 'Desert Storm', type: 'SAND', pow: 85, acc: 90, doubles: true, fx: { spread: true, enemy: { spd: -1 }, enemyChance: 20 } }],
+  kaido:      [{ name: 'Boro Breath: Sweep', type: 'FLAME', pow: 90, acc: 90, doubles: true, fx: { spread: true, burn: 20 } }],
+  buggy:      [{ name: 'Buggy Ball Barrage', type: 'SHOT', pow: 80, acc: 90, doubles: true, fx: { spread: true, burn: 10 } }],
+  imu:        [{ name: 'Mother Flame: Cataclysm', type: 'LIGHT', pow: 100, acc: 85, doubles: true, fx: { spread: true, burn: 20 } }],
+  doflamingo: [{ name: 'Birdcage', type: 'SLASH', pow: 80, acc: 95, doubles: true, fx: { spread: true, enemy: { spd: -1 }, enemyChance: 20 } }],
+  // team rally (speed / attack control)
+  nami:       [{ name: 'Tailwind Tempo', type: 'SEA', pow: 0, acc: 100, doubles: true, fx: { team: { spd: 2 } } }],
+  shanks:     [{ name: "Conqueror's Command", type: 'HAKI', pow: 0, acc: 100, doubles: true, fx: { team: { atk: 1 } } }],
+  // partner support
+  chopper:    [{ name: 'Cure-All Pulse', type: 'BEAST', pow: 0, acc: 100, doubles: true, fx: { allyHeal: 50 } }],
+  marco:      [{ name: 'Phoenix Grace', type: 'FLAME', pow: 0, acc: 100, doubles: true, fx: { allyHeal: 35, allyBuff: { def: 1 } } }],
+  law:        [{ name: 'Scan & Mend', type: 'SOUL', pow: 0, acc: 100, doubles: true, fx: { allyHeal: 30, allyBuff: { spd: 1 } } }],
+  robin:      [{ name: 'Mil Fleur: Shelter', type: 'SOUL', pow: 0, acc: 100, doubles: true, fx: { allyBuff: { def: 1, spd: 1 } } }],
+  // tanks that draw fire
+  jinbe:      [{ name: "Knight's Vanguard", type: 'SEA', pow: 0, acc: 100, prio: 3, doubles: true, fx: { redirect: true, self: { def: 1 } } }],
+  franky:     [{ name: 'Fortress Mode', type: 'STRIKE', pow: 0, acc: 100, prio: 3, doubles: true, fx: { redirect: true, self: { def: 1 } } }],
+};
+
 for (const c of CHARACTERS) {
   if (EXTRA_MOVES[c.id]) c.moves.push(...EXTRA_MOVES[c.id].map(m => ({ ...m })));
   c.moves.push({ ...PROTECT_MOVE });
+  if (DOUBLES_MOVES[c.id]) c.moves.push(...DOUBLES_MOVES[c.id].map(m => ({ ...m })));
 }
 
 const CHAR_BY_ID = {};

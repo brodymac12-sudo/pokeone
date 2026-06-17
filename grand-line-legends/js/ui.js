@@ -17,10 +17,24 @@ const UI = {
 const MOVESET_SIZE = 4;
 /* Both modes draft a crew of 4; doubles just fields two at a time with a bench. */
 function crewMax() { return CREW_SIZE; }
-/* Default loadout = the character's 4 canonical signature moves. */
-function defaultLoadout() { return [0, 1, 2, 3]; }
+/* Default loadout: the 4 signature moves in single, or a doubles-ready set
+   (signatures with the 2v2 move swapped in) in doubles — mirroring the AI. */
+function defaultLoadout(id) {
+  const c = CHAR_BY_ID[id];
+  if (UI.mode === 'doubles' && c) {
+    const set = [0, 1, 2, 3];
+    c.moves.forEach((m, i) => {
+      if (!m.doubles) return;
+      let wi = 0, wv = Infinity;
+      set.forEach((idx, k) => { const v = c.moves[idx].pow || 0; if (v < wv) { wv = v; wi = k; } });
+      set[wi] = i;
+    });
+    return set;
+  }
+  return [0, 1, 2, 3];
+}
 function ensureLoadout(id) {
-  if (!UI.loadouts[id]) UI.loadouts[id] = defaultLoadout();
+  if (!UI.loadouts[id]) UI.loadouts[id] = defaultLoadout(id);
   return UI.loadouts[id];
 }
 function loadoutMoves(id) {
@@ -52,8 +66,13 @@ function statChangeText(obj) {
 function describeMoveFx(mv) {
   const fx = mv.fx || {};
   const parts = [];
+  if (fx.spread) parts.push('💥 2v2: hits BOTH foes');
+  if (fx.team) parts.push(`📣 2v2: your side ${statChangeText(fx.team)}`);
+  if (fx.allyHeal) parts.push(`💞 2v2: heals partner ${fx.allyHeal}%`);
+  if (fx.allyBuff) parts.push(`📈 2v2: partner ${statChangeText(fx.allyBuff)}`);
+  if (fx.redirect) parts.push('🌀 2v2: draws the foes\' attacks');
   if (fx.protect) parts.push('🛡️ guards — blocks the next attack (weaker if spammed)');
-  if ((mv.prio || 0) > 0 && !fx.protect) parts.push('⚡ priority — acts first');
+  if ((mv.prio || 0) > 0 && !fx.protect && !fx.redirect) parts.push('⚡ priority — acts first');
   if (fx.multi) parts.push(`🌀 hits ${fx.multi[0] === fx.multi[1] ? fx.multi[0] : fx.multi[0] + '–' + fx.multi[1]}×`);
   if (fx.burn) parts.push(`🔥 ${fx.burn}% burn`);
   if (fx.poison) parts.push(`☠️ ${fx.poison}% poison`);
@@ -253,26 +272,34 @@ function showDetail(id) {
   wireMovesetPicker(id);
 }
 
+/* Moves visible in the builder: doubles-only moves appear in 2v2 mode only.
+   Returns [{ m, i }] keeping each move's real pool index for the loadout. */
+function visibleMoves(c) {
+  return c.moves.map((m, i) => ({ m, i })).filter(({ m }) => UI.mode === 'doubles' || !m.doubles);
+}
+
 /* Moves block: an interactive "pick 4" picker when the fighter is in the
-   crew, otherwise a read-only listing of the full pool. */
+   crew, otherwise a read-only listing of the visible pool. */
 function movesetSectionHTML(c) {
   const inCrew = UI.playerCrew.includes(c.id);
+  const vis = visibleMoves(c);
+  const hint = UI.mode === 'doubles' ? ' · ✦ = 2v2 move' : '';
   if (!inCrew) {
-    return `<div class="moveset-head">Move Pool <span class="ms-hint">— recruit to customize</span></div>
-      <div class="detail-moves">${c.moves.map(m => moveRowHTML(m)).join('')}</div>`;
+    return `<div class="moveset-head">Move Pool <span class="ms-hint">— recruit to customize${hint}</span></div>
+      <div class="detail-moves">${vis.map(({ m }) => moveRowHTML(m)).join('')}</div>`;
   }
   const lo = ensureLoadout(c.id);
   return `<div class="moveset-head">Moveset <span class="ms-count">${lo.length}/4</span>
-      <span class="ms-hint">— tap to choose 4</span></div>
+      <span class="ms-hint">— tap to choose 4${hint}</span></div>
     <div class="detail-moves moveset-pick">
-      ${c.moves.map((m, i) => selectableMoveHTML(m, i, lo.includes(i))).join('')}</div>`;
+      ${vis.map(({ m, i }) => selectableMoveHTML(m, i, lo.includes(i))).join('')}</div>`;
 }
 
 function selectableMoveHTML(m, idx, selected) {
   const fxParts = describeMoveFx(m);
   return `<div class="detail-move selectable${selected ? ' selected' : ''}" data-midx="${idx}">
     <div class="dm-top"><span class="ms-check">${selected ? '✓' : '＋'}</span>${typeBadge(m.type, true)}
-      <span class="mname">${m.name}</span>
+      <span class="mname">${m.doubles ? '<span class="dbl-tag">✦</span> ' : ''}${m.name}</span>
       <span class="mnum">${m.pow > 0 ? 'PWR ' + m.pow : 'STATUS'} · ACC ${m.acc}</span></div>
     ${fxParts.length ? `<div class="dm-fx">${fxParts.join(' · ')}</div>` : ''}</div>`;
 }
@@ -987,6 +1014,7 @@ function openTournament() {
 
 function openSelect(mode) {
   UI.mode = mode;
+  UI.loadouts = {};        // re-default movesets for the chosen mode
   UI.playerCrew = [];
   UI.selectedPreset = null;
   const h2 = document.querySelector('#screen-select .select-header h2');
@@ -1212,7 +1240,8 @@ function dPickMove(idx) {
   if (UI.dbl.busy) return;
   const f = dFighterAt('player', UI.dbl.curSlot);
   const mv = f.moves[idx], fx = mv.fx || {};
-  const needsTarget = mv.pow > 0 || fx.enemy || fx.sleep || fx.stun;
+  // spread / team / ally / redirect choose no target; single-target attacks & debuffs do
+  const needsTarget = !fx.spread && (mv.pow > 0 || fx.enemy || fx.sleep || fx.stun);
   const enemies = UI.dbl.battle.livingPositions('enemy');
   if (!needsTarget) return dRecord(idx, null);
   if (enemies.length <= 1) return dRecord(idx, { side: 'enemy', pos: enemies[0] });
