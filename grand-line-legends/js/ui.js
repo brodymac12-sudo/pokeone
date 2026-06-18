@@ -23,11 +23,13 @@ function defaultLoadout(id) {
   const c = CHAR_BY_ID[id];
   if (UI.mode === 'doubles' && c) {
     const set = [0, 1, 2, 3];
+    const used = new Set();
     c.moves.forEach((m, i) => {
       if (!m.doubles) return;
-      let wi = 0, wv = Infinity;
-      set.forEach((idx, k) => { const v = c.moves[idx].pow || 0; if (v < wv) { wv = v; wi = k; } });
-      set[wi] = i;
+      let wi = -1, wv = Infinity;
+      set.forEach((idx, k) => { if (used.has(k)) return; const v = c.moves[idx].pow || 0; if (v < wv) { wv = v; wi = k; } });
+      if (wi < 0) wi = 0;
+      set[wi] = i; used.add(wi);
     });
     return set;
   }
@@ -59,13 +61,16 @@ function typeBadge(t, small) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 /* ---- move effect descriptions (shared by battle, builder, library) ---- */
-const STAT_LABELS = { atk: 'ATK', def: 'DEF', spd: 'SPD' };
+const STAT_LABELS = { atk: 'ATK', def: 'DEF', satk: 'SP.ATK', sdef: 'SP.DEF', spd: 'SPD' };
 function statChangeText(obj) {
   return Object.entries(obj).map(([s, d]) => `${STAT_LABELS[s] || s} ${d > 0 ? '+' : ''}${d}`).join(', ');
 }
 function describeMoveFx(mv) {
   const fx = mv.fx || {};
   const parts = [];
+  if (mv.pow > 0) parts.push(mv.cat === 'special' ? '✨ Special' : '⚔️ Physical');
+  if (fx.trickRoom) parts.push('🌀 Trick Room — for 5 turns the slowest strike first');
+  if (fx.wideGuard) parts.push('🧱 2v2: shields your whole side from a spread hit');
   if (fx.spread) parts.push('💥 2v2: hits BOTH foes');
   if (fx.team) parts.push(`📣 2v2: your side ${statChangeText(fx.team)}`);
   if (fx.allyHeal) parts.push(`💞 2v2: heals partner ${fx.allyHeal}%`);
@@ -184,14 +189,13 @@ function buildSelectScreen() {
     roster.appendChild(chip);
   }
 
-  // opponent select
+  // opponent select (random + presets + saved teams)
   const sel = $('#opponent-select');
-  sel.innerHTML = '<option value="random">🎲 Random Crew</option>' +
-    PRESET_CREWS.map(c => `<option value="${c.id}">${c.flag} ${c.name}</option>`).join('');
-  sel.value = 'random';
   sel.addEventListener('change', () => { UI.opponentChoice = sel.value; });
+  refreshOpponentOptions();
 
   renderCrewSlots();
+  renderSavedTeams();
   showDetail(CHARACTERS[0].id);
   updateBattleButton();
 }
@@ -261,8 +265,8 @@ function showDetail(id) {
       </div>
     </div>
     <div class="statbars">
-      ${['hp', 'atk', 'def', 'spd'].map(s => `
-        <div class="statbar"><span>${s.toUpperCase()}</span>
+      ${['hp', 'atk', 'def', 'satk', 'sdef', 'spd'].map(s => `
+        <div class="statbar"><span>${STAT_LABELS[s] || s.toUpperCase()}</span>
           <div class="track"><div class="fill" style="width:${Math.min(100, c.stats[s] / maxStat * 100)}%"></div></div>
           <span>${c.stats[s]}</span></div>`).join('')}
     </div>
@@ -332,6 +336,8 @@ function toggleMoveSelect(id, idx) {
 
 function updateBattleButton() {
   const btn = $('#btn-battle');
+  const saveBtn = $('#btn-save-team');
+  if (saveBtn) saveBtn.disabled = UI.playerCrew.length === 0;
   const max = crewMax();
   const full = UI.playerCrew.length === max;
   const movesReady = UI.playerCrew.every(id => ensureLoadout(id).length === MOVESET_SIZE);
@@ -347,23 +353,114 @@ function updateBattleButton() {
   }
 }
 
-function pickOpponentCrew() {
-  const n = crewMax();
-  if (UI.opponentChoice !== 'random') {
-    const preset = PRESET_CREWS.find(c => c.id === UI.opponentChoice);
-    if (preset) return preset.members.slice(0, n);
+/* Clamp a list of move indices to a valid 4-move set for the current mode
+   (dropping doubles-only moves in 1v1) and backfill from the signature kit. */
+function sanitizeLoadout(c, indices) {
+  let lo = (indices || []).filter(i => c.moves[i] && (UI.mode === 'doubles' || !c.moves[i].doubles));
+  for (let i = 0; lo.length < MOVESET_SIZE && i < c.moves.length; i++)
+    if ((UI.mode === 'doubles' || !c.moves[i].doubles) && !lo.includes(i)) lo.push(i);
+  return (lo.length ? lo : defaultLoadout(c.id)).slice(0, MOVESET_SIZE);
+}
+
+/* Resolve the opponent: random crew, a famous preset, or a saved team
+   (value "team:<name>"). Returns { ids, loadouts } where loadouts is an
+   array of move-object arrays (or undefined to use defaults). */
+function pickOpponent() {
+  const n = crewMax(), v = UI.opponentChoice;
+  if (v && v.startsWith('team:')) {
+    const team = loadTeams().find(t => t.name === v.slice(5));
+    if (team) {
+      const ids = team.members.slice(0, n);
+      const loadouts = ids.map(id => sanitizeLoadout(CHAR_BY_ID[id], team.loadouts && team.loadouts[id]).map(i => CHAR_BY_ID[id].moves[i]));
+      return { ids, loadouts };
+    }
+  }
+  if (v && v !== 'random') {
+    const preset = PRESET_CREWS.find(c => c.id === v);
+    if (preset) return { ids: preset.members.slice(0, n), loadouts: undefined };
   }
   const pool = CHARACTERS.map(c => c.id).filter(id => !UI.playerCrew.includes(id));
-  const crew = [];
-  for (let i = 0; i < n; i++) crew.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
-  return crew;
+  const ids = [];
+  for (let i = 0; i < n; i++) ids.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  return { ids, loadouts: undefined };
+}
+
+/* ---- saved teams (localStorage) ---- */
+function loadTeams() { try { return JSON.parse(localStorage.getItem('gll-teams') || '[]'); } catch (e) { return []; } }
+function storeTeams(t) { try { localStorage.setItem('gll-teams', JSON.stringify(t)); } catch (e) {} }
+function saveCurrentTeam() {
+  if (!UI.playerCrew.length) return;
+  const suggested = UI.playerCrew.map(id => shortName(CHAR_BY_ID[id])).slice(0, 2).join(' & ');
+  const name = (prompt('Name this team:', suggested) || '').trim().slice(0, 24);
+  if (!name) return;
+  const team = { name, members: [...UI.playerCrew], loadouts: {} };
+  for (const id of UI.playerCrew) team.loadouts[id] = ensureLoadout(id).slice();
+  const teams = loadTeams();
+  const i = teams.findIndex(t => t.name === name);
+  if (i >= 0) teams[i] = team; else teams.push(team);
+  storeTeams(teams);
+  renderSavedTeams();
+  refreshOpponentOptions();
+}
+function deleteTeam(name) {
+  storeTeams(loadTeams().filter(t => t.name !== name));
+  renderSavedTeams();
+  refreshOpponentOptions();
+}
+function loadTeamIntoCrew(team) {
+  SFX.click();
+  UI.playerCrew = team.members.slice(0, crewMax());
+  UI.loadouts = {};
+  for (const id of UI.playerCrew) UI.loadouts[id] = sanitizeLoadout(CHAR_BY_ID[id], team.loadouts && team.loadouts[id]);
+  UI.selectedPreset = null;
+  $$('.preset-card').forEach(c => c.classList.remove('selected'));
+  renderCrewSlots();
+  renderRosterPicks();
+  if (UI.playerCrew[0]) showDetail(UI.playerCrew[0]);
+  updateBattleButton();
+  renderSavedTeams();
+}
+function renderSavedTeams() {
+  const list = $('#saved-teams-list');
+  if (!list) return;
+  const teams = loadTeams();
+  list.innerHTML = teams.length ? '' : '<span class="saved-empty">none yet — build a crew and hit Save</span>';
+  for (const team of teams) {
+    const chip = document.createElement('div');
+    chip.className = 'team-chip';
+    const load = document.createElement('button');
+    load.className = 'team-load';
+    load.textContent = team.name;
+    load.title = team.members.map(id => shortName(CHAR_BY_ID[id])).join(', ');
+    load.addEventListener('click', () => loadTeamIntoCrew(team));
+    const del = document.createElement('button');
+    del.className = 'team-del';
+    del.textContent = '✕';
+    del.title = 'Delete';
+    del.addEventListener('click', e => { e.stopPropagation(); SFX.click(); deleteTeam(team.name); });
+    chip.appendChild(load); chip.appendChild(del);
+    list.appendChild(chip);
+  }
+}
+function refreshOpponentOptions() {
+  const sel = $('#opponent-select');
+  if (!sel) return;
+  const cur = sel.value;
+  let html = '<option value="random">🎲 Random Crew</option>' +
+    PRESET_CREWS.map(c => `<option value="${c.id}">${c.flag} ${c.name}</option>`).join('');
+  const teams = loadTeams();
+  if (teams.length) html += '<optgroup label="Saved teams">' +
+    teams.map(t => `<option value="team:${t.name}">💾 ${t.name}</option>`).join('') + '</optgroup>';
+  sel.innerHTML = html;
+  sel.value = [...sel.options].some(o => o.value === cur) ? cur : 'random';
+  UI.opponentChoice = sel.value;
 }
 
 /* ============================ BATTLE SCREEN ============================ */
 
-function startBattle(playerIds, enemyIds, playerLoadouts) {
-  UI.lastCrews = { player: [...playerIds], enemy: [...enemyIds], playerLoadouts };
-  UI.battle = new Battle(playerIds, enemyIds, { playerLoadouts });
+function startBattle(playerIds, enemyIds, playerLoadouts, enemyLoadouts) {
+  UI.lastCrews = { player: [...playerIds], enemy: [...enemyIds], playerLoadouts, enemyLoadouts };
+  UI.battle = new Battle(playerIds, enemyIds, { playerLoadouts, enemyLoadouts });
   UI.busy = false;
   $('#battle-log').innerHTML = '';
   $('#turn-label').textContent = 'BATTLE START';
@@ -409,14 +506,14 @@ function renderCard(sideKey) {
 }
 
 /* Persistent buff/debuff readout: one chip per non-zero stat stage. */
-const STAGE_LABELS = { atk: 'ATK', def: 'DEF', spd: 'SPD' };
+const STAGE_LABELS = { atk: 'ATK', def: 'DEF', satk: 'SP.A', sdef: 'SP.D', spd: 'SPD' };
 function updateStages(sideKey) {
   const f = fighter(sideKey);
   const card = $(sideKey === 'player' ? '#player-card' : '#enemy-card');
   const row = card.querySelector('.stage-row');
   if (!row) return;
   const chips = [];
-  for (const s of ['atk', 'def', 'spd']) {
+  for (const s of ['atk', 'def', 'satk', 'sdef', 'spd']) {
     const v = f.stages[s];
     if (!v) continue;
     const arrows = (v > 0 ? '▲' : '▼').repeat(Math.min(3, Math.abs(v)));
@@ -810,8 +907,8 @@ function renderLibDetail(id) {
       </div>
     </div>
     <div class="statbars">
-      ${['hp', 'atk', 'def', 'spd'].map(s => `
-        <div class="statbar"><span>${s.toUpperCase()}</span>
+      ${['hp', 'atk', 'def', 'satk', 'sdef', 'spd'].map(s => `
+        <div class="statbar"><span>${STAT_LABELS[s] || s.toUpperCase()}</span>
           <div class="track"><div class="fill" style="width:${Math.min(100, c.stats[s] / maxStat * 100)}%"></div></div>
           <span>${c.stats[s]}</span></div>`).join('')}
     </div>
@@ -1027,6 +1124,8 @@ function openSelect(mode) {
   $$('.preset-card').forEach(c => c.classList.remove('selected'));
   renderCrewSlots();
   renderRosterPicks();
+  renderSavedTeams();
+  refreshOpponentOptions();
   showDetail(CHARACTERS[0].id);
   updateBattleButton();
   showScreen('#screen-select');
@@ -1037,10 +1136,10 @@ function openSelect(mode) {
 function dUnitEl(side, pos) { return document.querySelector(`#screen-doubles .d-unit[data-side="${side}"][data-slot="${pos}"]`); }
 function dFighterAt(side, pos) { return UI.dbl.battle.fighterAt(side, pos); }
 
-function startDoublesBattle(playerIds, enemyIds, playerLoadouts) {
+function startDoublesBattle(playerIds, enemyIds, playerLoadouts, enemyLoadouts) {
   UI.dbl = {
-    battle: new DoublesBattle(playerIds, enemyIds, { playerLoadouts }),
-    lastCrews: { player: [...playerIds], enemy: [...enemyIds], playerLoadouts },
+    battle: new DoublesBattle(playerIds, enemyIds, { playerLoadouts, enemyLoadouts }),
+    lastCrews: { player: [...playerIds], enemy: [...enemyIds], playerLoadouts, enemyLoadouts },
     busy: false, pending: [], queue: [], curSlot: null, pendingIdx: null,
   };
   $('#d-battle-log').innerHTML = '';
@@ -1098,7 +1197,7 @@ function dUpdateStages(side, pos) {
   const f = dFighterAt(side, pos); if (!f) return;
   const row = dUnitEl(side, pos).querySelector('.stage-row'); if (!row) return;
   const chips = [];
-  for (const s of ['atk', 'def', 'spd']) {
+  for (const s of ['atk', 'def', 'satk', 'sdef', 'spd']) {
     const v = f.stages[s]; if (!v) continue;
     const arrows = (v > 0 ? '▲' : '▼').repeat(Math.min(3, Math.abs(v)));
     chips.push(`<span class="stage-chip ${v > 0 ? 'up' : 'down'}">${STAGE_LABELS[s]} ${arrows}</span>`);
@@ -1359,9 +1458,12 @@ function initUI() {
     if (!UI.playerCrew.every(id => ensureLoadout(id).length === MOVESET_SIZE)) return;
     SFX.click();
     const loadouts = UI.playerCrew.map(id => loadoutMoves(id));
-    if (UI.mode === 'doubles') startDoublesBattle([...UI.playerCrew], pickOpponentCrew(), loadouts);
-    else startBattle([...UI.playerCrew], pickOpponentCrew(), loadouts);
+    const opp = pickOpponent();
+    if (UI.mode === 'doubles') startDoublesBattle([...UI.playerCrew], opp.ids, loadouts, opp.loadouts);
+    else startBattle([...UI.playerCrew], opp.ids, loadouts, opp.loadouts);
   });
+
+  $('#btn-save-team').addEventListener('click', () => { SFX.click(); saveCurrentTeam(); });
 
   $('#d-btn-forfeit').addEventListener('click', () => {
     if (UI.dbl && UI.dbl.busy) return;
@@ -1379,9 +1481,9 @@ function initUI() {
     SFX.click();
     if (UI.mode === 'doubles') {
       const lc = UI.dbl && UI.dbl.lastCrews;
-      if (lc) startDoublesBattle([...lc.player], [...lc.enemy], lc.playerLoadouts);
+      if (lc) startDoublesBattle([...lc.player], [...lc.enemy], lc.playerLoadouts, lc.enemyLoadouts);
     } else if (UI.lastCrews) {
-      startBattle([...UI.lastCrews.player], [...UI.lastCrews.enemy], UI.lastCrews.playerLoadouts);
+      startBattle([...UI.lastCrews.player], [...UI.lastCrews.enemy], UI.lastCrews.playerLoadouts, UI.lastCrews.enemyLoadouts);
     }
   });
   $('#btn-newcrew').addEventListener('click', () => { SFX.click(); openSelect(UI.mode); });

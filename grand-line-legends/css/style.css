@@ -370,6 +370,17 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 400; letter-spacing:
 .d-switch-btn { min-height: 0; }
 .d-switch-btn .mv-meta { color: #9fb8d4; }
 .dbl-tag { color: var(--gold); font-weight: 800; font-size: 11px; }
+
+/* ---- saved teams bar ---- */
+.saved-teams { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin: 4px 0 12px; }
+.saved-teams .saved-label { color: #9fb8d4; font-size: 12.5px; }
+.saved-teams-list { display: flex; gap: 7px; flex-wrap: wrap; }
+.saved-empty { color: #6f86a0; font-size: 12px; font-style: italic; }
+.team-chip { display: inline-flex; align-items: stretch; border: 1px solid var(--panel-edge); border-radius: 8px; overflow: hidden; background: rgba(13, 30, 52, 0.7); }
+.team-load { background: transparent; color: var(--parchment); border: 0; padding: 5px 10px; font-family: var(--font-body); font-size: 12.5px; cursor: pointer; }
+.team-load:hover { background: rgba(232, 184, 74, 0.16); }
+.team-del { background: transparent; color: #c97b7b; border: 0; border-left: 1px solid var(--panel-edge); padding: 0 8px; cursor: pointer; font-size: 12px; }
+.team-del:hover { background: rgba(200, 60, 60, 0.22); color: #fff; }
 .d-bench-card { display: flex; align-items: center; gap: 10px; }
 .d-bench-card .bench-info { display: flex; flex-direction: column; gap: 3px; }
 .d-bench-card .mv-meta { gap: 5px; }

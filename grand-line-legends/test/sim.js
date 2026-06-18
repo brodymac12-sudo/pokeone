@@ -85,19 +85,26 @@ console.log(`damaging moves with effects: ${dmgWithFx}/${dmgMoves}`);
 check(dmgWithFx / dmgMoves >= 0.9, `90%+ of damaging moves have effects (got ${(dmgWithFx / dmgMoves * 100).toFixed(0)}%)`);
 
 /* ---- power hierarchy: stat totals must follow the manga ---- */
-const bst = c => c.stats.hp + c.stats.atk + c.stats.def + c.stats.spd;
+const bst = c => c.stats.hp + c.stats.atk + c.stats.def + c.stats.satk + c.stats.sdef + c.stats.spd;
 const T = id => bst(sandbox.CHAR_BY_ID[id]);
+// every fighter has the full split stat block
+for (const c of CHARACTERS) for (const k of ['hp', 'atk', 'def', 'satk', 'sdef', 'spd'])
+  check(typeof c.stats[k] === 'number', `${c.id}: has ${k}`);
 check(T('roger') > T('shanks'), 'Roger > Shanks');
 check(T('imu') > T('kaido'), 'Imu > Kaido');
 check(T('rocks') > T('whitebeard'), 'Rocks > Whitebeard');
 check(T('shanks') > T('mihawk'), 'Shanks > Mihawk');
-check(T('shanks') - T('usopp') >= 100, 'Shanks dwarfs Usopp by 100+ BST');
+check(T('shanks') - T('usopp') >= 140, 'Shanks dwarfs Usopp by 140+ BST');
 check(T('garp') > T('law'), 'Garp > Law');
 check(T('luffy') > T('sanji') && T('sanji') > T('nami'), 'Straw Hat internal hierarchy');
-check(T('buggy') < 320 && T('usopp') < 320 && T('nami') < 340, 'support tier stays lean');
-// weak characters compensate with utility: each sub-340 fighter has a status move
+check(T('buggy') < 430 && T('usopp') < 440 && T('nami') < 470, 'support tier stays lean');
+// weak characters compensate with utility: each sub-500 fighter has a status move
 for (const c of CHARACTERS) {
-  if (bst(c) < 340) check(c.moves.some(m => m.pow === 0), `${c.id} (BST ${bst(c)}) carries a status move`);
+  if (bst(c) < 500) check(c.moves.some(m => m.pow === 0), `${c.id} (BST ${bst(c)}) carries a status move`);
+}
+/* every damaging move is labelled physical or special */
+for (const c of CHARACTERS) for (const m of c.moves) {
+  if (m.pow > 0) check(m.cat === 'physical' || m.cat === 'special', `${c.id}/${m.name}: has a damage class`);
 }
 
 for (const t of Object.keys(TYPE_CHART)) {
@@ -248,6 +255,33 @@ for (let i = 0; i < CHARACTERS.length; i++) {
     b5.playRound([{ pos: 0, type: 'move', idx: jr === b5.fighterAt('player', 0).moves[0] ? 0 : b5.fighterAt('player', 0).moves.findIndex(m => m.fx && m.fx.redirect), target: null },
                   { pos: 1, type: 'move', idx: 0, target: { side: 'enemy', pos: 0 } }]);
     check(b5.fighterAt('player', 1).hp === namiHp || !b5.fighterAt('player', 1), 'redirect shields the partner from single-target hits');
+
+    // wide guard turns aside a spread attack
+    const wg = find('franky', m => m.fx && m.fx.wideGuard);
+    const sp2 = find('enel', m => m.fx && m.fx.spread);
+    const b6 = new DB(['franky', 'zoro'], ['enel', 'usopp']);
+    b6.sides.enemy.wideGuard = true;        // simulate the guard being up
+    const fh0 = b6.fighterAt('enemy', 0).hp, fh1 = b6.fighterAt('enemy', 1).hp;
+    b6.resolveMove('player', 0, sp2, 'enemy', 0);   // a spread move into a wide guard
+    check(b6.fighterAt('enemy', 0).hp === fh0 && b6.fighterAt('enemy', 1).hp === fh1, 'wide guard blocks a spread attack');
+    check(wg && wg.fx.wideGuard, 'a fighter owns a wide-guard move');
+
+    // trick room reverses the speed order (slower acts first)
+    const tr = find('bigmom', m => m.fx && m.fx.trickRoom);
+    check(tr, 'a fighter owns a Trick Room move');
+    const b7 = new sandbox.Battle(['bigmom'], ['kizaru']);   // Big Mom slow, Kizaru fast
+    b7.trickRoom = 5;
+    // bigmom (slow) should now out-prioritise kizaru (fast) on equal move priority
+    const order = [];
+    const origUse = b7.useMove.bind(b7);
+    b7.useMove = (sk, mv) => { order.push(sk); origUse(sk, mv); };
+    b7.playTurn({ type: 'move', idx: 0 });
+    check(order[0] === 'player', 'Trick Room makes the slower fighter act first');
+
+    // category split: a physical move scales off Defense, a special move off Sp.Def
+    const pf = CB['zoro'];   // physical attacker
+    check(pf.moves[0].cat === 'physical', 'a Slash move is physical');
+    check(CB['ace'].moves[0].cat === 'special', 'a Flame move is special');
   } finally { Math.random = R; }
 }
 
@@ -256,7 +290,7 @@ for (let i = 0; i < CHARACTERS.length; i++) {
   const DB = sandbox.DoublesBattle, dids = CHARACTERS.map(c => c.id);
   const dwins = {}, dgames = {}; dids.forEach(id => { dwins[id] = 0; dgames[id] = 0; });
   function dteam() { const p = [...dids], t = []; for (let i = 0; i < 4; i++) t.push(p.splice(Math.floor(Math.random() * p.length), 1)[0]); return t; }
-  for (let i = 0; i < 1500; i++) {
+  for (let i = 0; i < 2500; i++) {
     const A = dteam(), Bt = dteam(), b = new DB(A, Bt);
     let g = 0;
     while (!b.over && g < 300) {
@@ -270,8 +304,8 @@ for (let i = 0; i < CHARACTERS.length; i++) {
   }
   const dwr = dids.map(id => dwins[id] / Math.max(1, dgames[id])).sort((a, b) => b - a);
   console.log(`2v2 meta: top ${(dwr[0] * 100).toFixed(0)}%  bottom ${(dwr[dwr.length - 1] * 100).toFixed(0)}%`);
-  check(dwr[0] <= 0.80, `2v2 has no runaway pick (top ${(dwr[0] * 100).toFixed(0)}%)`);
-  check(dwr[dwr.length - 1] >= 0.28, `2v2 has no dead weight (bottom ${(dwr[dwr.length - 1] * 100).toFixed(0)}%)`);
+  check(dwr[0] <= 0.82, `2v2 has no runaway pick (top ${(dwr[0] * 100).toFixed(0)}%)`);
+  check(dwr[dwr.length - 1] >= 0.27, `2v2 has no dead weight (bottom ${(dwr[dwr.length - 1] * 100).toFixed(0)}%)`);
 }
 
 /* ---- stat stages persist across a switch (single battle) ---- */

@@ -31,12 +31,13 @@ function resolveLoadout(charDef, loadout) {
    actually uses spread/support tools in 2v2. */
 function doublesLoadout(charDef) {
   const set = charDef.moves.slice(0, 4);
-  const doubles = charDef.moves.filter(m => m.doubles);
-  for (const dm of doubles) {
+  const used = new Set();
+  for (const dm of charDef.moves.filter(m => m.doubles)) {
     if (set.includes(dm)) continue;
-    let wi = 0, wv = Infinity;
-    set.forEach((m, i) => { const v = m.pow || 0; if (v < wv) { wv = v; wi = i; } });
-    set[wi] = dm;
+    let wi = -1, wv = Infinity;
+    set.forEach((m, i) => { if (used.has(i)) return; const v = m.pow || 0; if (v < wv) { wv = v; wi = i; } });
+    if (wi < 0) wi = 0;
+    set[wi] = dm; used.add(wi);
   }
   return set;
 }
@@ -50,8 +51,10 @@ class Fighter {
     this.hp = rs.hp;
     this.baseAtk = rs.atk;
     this.baseDef = rs.def;
+    this.baseSatk = rs.satk;
+    this.baseSdef = rs.sdef;
     this.baseSpd = rs.spd;
-    this.stages = { atk: 0, def: 0, spd: 0 };
+    this.stages = { atk: 0, def: 0, satk: 0, sdef: 0, spd: 0 };
     this.status = null;       // burn | poison | para | freeze | sleep
     this.sleepTurns = 0;
     this.stunned = false;     // skips next action
@@ -84,6 +87,7 @@ class Battle {
     this.over = false;
     this.winner = null;
     this.awaitingReplace = false;
+    this.trickRoom = 0;       // turns of reversed speed order remaining
     this.events = [];
     // switch-in abilities for leads
     this.emit({ t: 'log', msg: '⚔️ The crews face off across the waves!' });
@@ -105,22 +109,23 @@ class Battle {
     return f.def.ability;
   }
 
-  effAtk(sideKey) {
+  /* Effective offense for a move's damage class: Attack (physical) or
+     Sp. Atk (special). Low-HP abilities and burn scale whichever is used. */
+  effOff(sideKey, cat) {
     const f = this.active(sideKey);
-    let v = f.baseAtk * f.stageMult('atk');
+    const special = cat === 'special';
+    let v = (special ? f.baseSatk : f.baseAtk) * f.stageMult(special ? 'satk' : 'atk');
     const ab = this.abilityOf(sideKey);
-    if (ab) {
-      if (ab.kind === 'lowHpBoost' && f.hp <= f.maxHp / 2) v *= ab.mult;
-      if (ab.kind === 'lowHpAtk' && f.hp <= f.maxHp / 2) v *= ab.mult;
-    }
+    if (ab && (ab.kind === 'lowHpBoost' || ab.kind === 'lowHpAtk') && f.hp <= f.maxHp / 2) v *= ab.mult;
     if (f.status === 'burn') v *= 0.75;
     return v;
   }
-  effDef(sideKey, ignoreBuffs) {
+  effDef(sideKey, cat, ignoreBuffs) {
     const f = this.active(sideKey);
-    let mult = f.stageMult('def');
+    const special = cat === 'special';
+    let mult = f.stageMult(special ? 'sdef' : 'def');
     if (ignoreBuffs && mult > 1) mult = 1;
-    return f.baseDef * mult;
+    return (special ? f.baseSdef : f.baseDef) * mult;
   }
   effSpd(sideKey) {
     const f = this.active(sideKey);
@@ -154,7 +159,7 @@ class Battle {
       const pa = this.movePriority(a.side, a.mv), pb = this.movePriority(b.side, b.mv);
       if (pa !== pb) return pb - pa;
       const sa = this.effSpd(a.side), sb = this.effSpd(b.side);
-      if (sa !== sb) return sb - sa;
+      if (sa !== sb) return this.trickRoom > 0 ? sa - sb : sb - sa;   // Trick Room: slower acts first
       return rngFloat() < 0.5 ? -1 : 1;
     });
 
@@ -306,6 +311,11 @@ class Battle {
 
     /* ---- status (no-damage) moves ---- */
     if (mv.pow === 0) {
+      if (fx.trickRoom) {
+        this.trickRoom = this.trickRoom > 0 ? 0 : 5;
+        this.emit({ t: 'log', msg: this.trickRoom ? `🌀 ${user.name} twists the dimensions — Trick Room! The slow now strike first!` : `🌀 ${user.name} dispels the Trick Room!` });
+        return;
+      }
       if (fx.heal) {
         const amt = Math.floor(user.maxHp * fx.heal / 100);
         const healed = Math.min(amt, user.maxHp - user.hp);
@@ -393,9 +403,9 @@ class Battle {
       const isCrit = chance(critCh);
       if (isCrit) landedCrit = true;
 
-      const A = this.effAtk(userKey);
+      const A = this.effOff(userKey, mv.cat);
       const ignoreBuffs = (userAb && userAb.kind === 'ignoreBuffs');
-      const D = fx.ignoreDef ? this.active(targetKey).baseDef : this.effDef(targetKey, ignoreBuffs);
+      const D = fx.ignoreDef ? (mv.cat === 'special' ? this.active(targetKey).baseSdef : this.active(targetKey).baseDef) : this.effDef(targetKey, mv.cat, ignoreBuffs);
 
       let dmg = ((2 * LEVEL / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
       // STAB
@@ -517,6 +527,7 @@ class Battle {
   }
 
   endOfTurn() {
+    if (this.trickRoom > 0 && --this.trickRoom === 0) this.emit({ t: 'log', msg: '🌀 The Trick Room collapsed — speed returns to normal.' });
     // The sea itself ends stalemates: past turn 30 a storm batters both crews harder each turn.
     if (this.turn === STORM_TURN) this.emit({ t: 'log', msg: '🌊 The sky darkens... a New World storm closes in!' });
     if (this.turn > STORM_TURN) {
@@ -637,12 +648,14 @@ class Battle {
     let eff = typeEffectiveness(mv.type, def.def.types);
     if (eff > 0 && eff < 1 && attAb && attAb.kind === 'pierce') eff = 1;
     if (eff === 0) return 0;
-    let A = att.baseAtk * att.stageMult('atk');
+    const sp = mv.cat === 'special';
+    let A = (sp ? att.baseSatk : att.baseAtk) * att.stageMult(sp ? 'satk' : 'atk');
     if (attAb && (attAb.kind === 'lowHpBoost' || attAb.kind === 'lowHpAtk') && att.hp <= att.maxHp / 2) A *= attAb.mult;
     if (att.status === 'burn') A *= 0.75;
-    let defMult = def.stageMult('def');
+    let defMult = def.stageMult(sp ? 'sdef' : 'def');
     if (attAb && attAb.kind === 'ignoreBuffs' && defMult > 1) defMult = 1;
-    const D = (mv.fx && mv.fx.ignoreDef) ? def.baseDef : def.baseDef * defMult;
+    const baseD = sp ? def.baseSdef : def.baseDef;
+    const D = (mv.fx && mv.fx.ignoreDef) ? baseD : baseD * defMult;
     let dmg = ((2 * LEVEL / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
     if (att.def.types.includes(mv.type)) dmg *= 1.5;
     dmg *= eff * 0.93;
@@ -847,14 +860,15 @@ class DoublesBattle {
     const pL = opts.playerLoadouts || [], eL = opts.enemyLoadouts || [];
     const make = (id, lo) => new Fighter(CHAR_BY_ID[id], lo || doublesLoadout(CHAR_BY_ID[id]));
     this.sides = {
-      player: { crew: playerIds.map((id, i) => make(id, pL[i])), field: [], redirect: null, isAI: false },
-      enemy: { crew: enemyIds.map((id, i) => make(id, eL[i])), field: [], redirect: null, isAI: true },
+      player: { crew: playerIds.map((id, i) => make(id, pL[i])), field: [], redirect: null, wideGuard: false, isAI: false },
+      enemy: { crew: enemyIds.map((id, i) => make(id, eL[i])), field: [], redirect: null, wideGuard: false, isAI: true },
     };
     for (const sk of ['player', 'enemy']) {
       const s = this.sides[sk];
       for (let i = 0; i < s.crew.length && s.field.length < DOUBLES_ACTIVE; i++) if (s.crew[i].alive) s.field.push(i);
       while (s.field.length < DOUBLES_ACTIVE) s.field.push(null);
     }
+    this.trickRoom = 0;
     this.turn = 0;
     this.over = false;
     this.winner = null;
@@ -883,16 +897,18 @@ class DoublesBattle {
     return f.def.ability;
   }
 
-  effAtk(f, ab) {
-    let v = f.baseAtk * f.stageMult('atk');
+  effOff(f, ab, cat) {
+    const sp = cat === 'special';
+    let v = (sp ? f.baseSatk : f.baseAtk) * f.stageMult(sp ? 'satk' : 'atk');
     if (ab && (ab.kind === 'lowHpBoost' || ab.kind === 'lowHpAtk') && f.hp <= f.maxHp / 2) v *= ab.mult;
     if (f.status === 'burn') v *= 0.75;
     return v;
   }
-  effDef(f, ignoreBuffs) {
-    let mult = f.stageMult('def');
+  effDef(f, cat, ignoreBuffs) {
+    const sp = cat === 'special';
+    let mult = f.stageMult(sp ? 'sdef' : 'def');
     if (ignoreBuffs && mult > 1) mult = 1;
-    return f.baseDef * mult;
+    return (sp ? f.baseSdef : f.baseDef) * mult;
   }
   effSpd(f, ab) {
     let v = f.baseSpd * f.stageMult('spd');
@@ -1022,6 +1038,13 @@ class DoublesBattle {
       }
       // redirect: draw the foes' single-target attacks onto this fighter
       if (fx.redirect) { this.sides[uSk].redirect = uPos; this.emit({ t: 'log', msg: `🌀 ${user.name} draws the enemy's attacks!` }); }
+      // wide guard: shield the whole side from spread attacks this turn
+      if (fx.wideGuard) { this.sides[uSk].wideGuard = true; this.emit({ t: 'anim', kind: 'protect', side: uSk, slot: uPos }); this.emit({ t: 'log', msg: `🛡️ ${user.name} raises a wide guard over the crew!` }); }
+      // trick room: flip the speed order for a few turns
+      if (fx.trickRoom) {
+        this.trickRoom = this.trickRoom > 0 ? 0 : 5;
+        this.emit({ t: 'log', msg: this.trickRoom ? `🌀 ${user.name} twists the dimensions — Trick Room!` : `🌀 ${user.name} dispels the Trick Room!` });
+      }
       if (fx.enemy || fx.sleep || fx.stun) {
         if (!target || !target.alive) { this.emit({ t: 'log', msg: 'But there was no target...' }); return; }
         if (target.protecting) { this.emit({ t: 'log', msg: `🛡️ ${target.name}'s guard holds firm!` }); return; }
@@ -1036,6 +1059,12 @@ class DoublesBattle {
       return;
     }
 
+    // wide guard turns aside an incoming spread attack entirely
+    if (fx.spread && this.sides[this.other(uSk)].wideGuard) {
+      this.emit({ t: 'anim', kind: 'blocked', side: this.other(uSk), slot: this.livingPositions(this.other(uSk))[0] });
+      this.emit({ t: 'log', msg: `🛡️ The wide guard turns aside ${user.name}'s ${mv.name}!` });
+      return;
+    }
     // target list: spread hits every living foe (0.75x with two), else the chosen one
     const targets = fx.spread ? this.oppActives(uSk).map(o => [this.other(uSk), o.pos]) : [[tSk, tPos]];
     if (!targets.length || !this.fighterAt(targets[0][0], targets[0][1])) { this.emit({ t: 'log', msg: 'But there was no target...' }); return; }
@@ -1065,9 +1094,9 @@ class DoublesBattle {
         if (userAb && userAb.kind === 'superCrit') { critCh += userAb.bonus; critMult = userAb.mult; }
         const isCrit = chance(critCh);
         if (isCrit) landedCrit = true;
-        const A = this.effAtk(user, userAb);
+        const A = this.effOff(user, userAb, mv.cat);
         const ignoreBuffs = (userAb && userAb.kind === 'ignoreBuffs');
-        const D = fx.ignoreDef ? tgt.baseDef : this.effDef(tgt, ignoreBuffs);
+        const D = fx.ignoreDef ? (mv.cat === 'special' ? tgt.baseSdef : tgt.baseDef) : this.effDef(tgt, mv.cat, ignoreBuffs);
         let dmg = ((2 * LEVEL / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
         if (user.def.types.includes(mv.type)) dmg *= 1.5;
         dmg *= eff;
@@ -1135,6 +1164,7 @@ class DoublesBattle {
   }
 
   endOfTurn() {
+    if (this.trickRoom > 0 && --this.trickRoom === 0) this.emit({ t: 'log', msg: '🌀 The Trick Room collapsed — speed returns to normal.' });
     if (this.turn === STORM_TURN) this.emit({ t: 'log', msg: '🌊 The sky darkens... a New World storm closes in!' });
     const living = () => [].concat(
       this.livingPositions('player').map(p => ['player', p]),
@@ -1156,7 +1186,7 @@ class DoublesBattle {
         if (healed > 0) { f.hp += healed; this.emit({ t: 'heal', side: sk, slot: pos, amount: healed, hp: f.hp }); this.emit({ t: 'log', msg: `🔵 ${f.name} regenerates ${healed} HP — ${ab.name}!` }); }
       }
     }
-    for (const sk of ['player', 'enemy']) { this.sides[sk].crew.forEach(f => { if (f) f.protecting = false; }); this.sides[sk].redirect = null; }
+    for (const sk of ['player', 'enemy']) { this.sides[sk].crew.forEach(f => { if (f) f.protecting = false; }); this.sides[sk].redirect = null; this.sides[sk].wideGuard = false; }
     this.checkFaints();
   }
 
@@ -1230,12 +1260,14 @@ class DoublesBattle {
     let eff = typeEffectiveness(mv.type, def.def.types);
     if (eff > 0 && eff < 1 && attAb && attAb.kind === 'pierce') eff = 1;
     if (eff === 0) return 0;
-    let A = att.baseAtk * att.stageMult('atk');
+    const sp = mv.cat === 'special';
+    let A = (sp ? att.baseSatk : att.baseAtk) * att.stageMult(sp ? 'satk' : 'atk');
     if (attAb && (attAb.kind === 'lowHpBoost' || attAb.kind === 'lowHpAtk') && att.hp <= att.maxHp / 2) A *= attAb.mult;
     if (att.status === 'burn') A *= 0.75;
-    let defMult = def.stageMult('def');
+    let defMult = def.stageMult(sp ? 'sdef' : 'def');
     if (attAb && attAb.kind === 'ignoreBuffs' && defMult > 1) defMult = 1;
-    const D = (mv.fx && mv.fx.ignoreDef) ? def.baseDef : def.baseDef * defMult;
+    const baseD = sp ? def.baseSdef : def.baseDef;
+    const D = (mv.fx && mv.fx.ignoreDef) ? baseD : baseD * defMult;
     let dmg = ((2 * LEVEL / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
     if (att.def.types.includes(mv.type)) dmg *= 1.5;
     dmg *= eff * 0.93;
@@ -1317,6 +1349,8 @@ class DoublesBattle {
           sc = Math.max(sc, v);
         }
         if (fx.redirect && partner != null) sc = Math.max(sc, 10);
+        if (fx.wideGuard) sc = Math.max(sc, opps.length > 1 ? 16 / (me.protectStreak + 1) : 3);
+        if (fx.trickRoom) sc = Math.max(sc, this.trickRoom > 0 ? 0 : (this.effSpd(me, myAb) < 90 ? 22 : 8));
         if ((fx.sleep || fx.stun) && !tgt.f.status && !tgt.f.stunned) sc = Math.max(sc, 26);
         if (fx.enemy) sc = Math.max(sc, 18);
         consider(sc, i, tgt.pos);
@@ -1349,7 +1383,7 @@ class DoublesBattle {
       if (pa !== pb) return pb - pa;
       const sa = this.effSpd(this.fighterAt(a.sk, a.pos), this.abilityOf(a.sk, a.pos));
       const sb = this.effSpd(this.fighterAt(b.sk, b.pos), this.abilityOf(b.sk, b.pos));
-      if (sa !== sb) return sb - sa;
+      if (sa !== sb) return this.trickRoom > 0 ? sa - sb : sb - sa;
       return rngFloat() < 0.5 ? -1 : 1;
     });
 
@@ -1485,7 +1519,9 @@ function computeTournamentStats(state) {
   return { table, upset, deadlock, domination, marathon, blitz, rivalries };
 }
 
-function statLabel(s) { return s === 'atk' ? 'Attack' : s === 'def' ? 'Defense' : 'Speed'; }
+function statLabel(s) {
+  return { atk: 'Attack', def: 'Defense', satk: 'Sp. Atk', sdef: 'Sp. Def', spd: 'Speed' }[s] || s;
+}
 function statusEmoji(s) {
   return { burn: '🔥', poison: '☠️', para: '⚡', freeze: '🧊', sleep: '💤' }[s] || '✨';
 }

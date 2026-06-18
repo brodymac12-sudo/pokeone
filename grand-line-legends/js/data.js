@@ -65,6 +65,17 @@ function typeEffectiveness(moveType, defenderTypes) {
   return mult;
 }
 
+/* Damage class by type: martial / armament arts strike the body (Physical,
+   uses Attack vs Defense); devil-fruit & elemental powers are Special (uses
+   Sp. Atk vs Sp. Def). A move may override with its own `cat`. */
+const TYPE_CATEGORY = {
+  SLASH: 'physical', STRIKE: 'physical', SHOT: 'physical', RUBBER: 'physical',
+  TREMOR: 'physical', BEAST: 'physical', HAKI: 'physical',
+  FLAME: 'special', ICE: 'special', LIGHTNING: 'special', LIGHT: 'special',
+  DARKNESS: 'special', POISON: 'special', SAND: 'special', SEA: 'special', SOUL: 'special',
+};
+function moveCategory(m) { return m.cat || TYPE_CATEGORY[m.type] || 'physical'; }
+
 /* ---- Move effect fields ----
    pow: 0 = status move. acc: percent. prio: move priority.
    fx: { burn/poison/para/freeze/sleep/stun: % chance on hit,
@@ -245,7 +256,7 @@ const CHARACTERS = [
       { name: 'Yasakani Sacred Jewel', type: 'LIGHT', pow: 42, acc: 90, fx: { multi: [2, 3] } },
       { name: 'Light Speed Kick', type: 'LIGHT', pow: 85, acc: 100, prio: 1 },
       { name: 'Ama no Murakumo', type: 'SLASH', pow: 90, acc: 100, fx: { critBoost: 25 } },
-      { name: 'Yata Mirror', type: 'LIGHT', pow: 0, acc: 100, fx: { self: { atk: 1, spd: 1 } } },
+      { name: 'Yata Mirror', type: 'LIGHT', pow: 0, acc: 100, fx: { self: { satk: 1, spd: 1 } } },
     ],
   },
   {
@@ -567,11 +578,74 @@ const DOUBLES_MOVES = {
   franky:     [{ name: 'Fortress Mode', type: 'STRIKE', pow: 0, acc: 100, prio: 3, doubles: true, fx: { redirect: true, self: { def: 1 } } }],
 };
 
+/* Field-control moves. Trick Room flips the turn order for a few turns
+   (a boon to slow heavyweights) and works in any mode. Wide Guard shields
+   the whole side from a spread attack for the turn — a 2v2-only tool. */
+const FIELD_MOVES = {
+  bigmom:     [{ name: 'Soul Reversal', type: 'SOUL', pow: 0, acc: 100, prio: -1, fx: { trickRoom: true } }],
+  magellan:   [{ name: 'Venom Dominion', type: 'POISON', pow: 0, acc: 100, prio: -1, fx: { trickRoom: true } }],
+  kaido:      [{ name: 'Beast King Roar', type: 'HAKI', pow: 0, acc: 100, prio: -1, fx: { trickRoom: true } }],
+  imu:        [{ name: 'Reverse the Throne', type: 'DARKNESS', pow: 0, acc: 100, prio: -1, fx: { trickRoom: true } }],
+  whitebeard: [{ name: 'Gura Bubble Wall', type: 'TREMOR', pow: 0, acc: 100, prio: -1, fx: { trickRoom: true } }],
+};
+const WIDE_GUARD = {
+  franky:     [{ name: 'Iron Wall', type: 'STRIKE', pow: 0, acc: 100, prio: 3, doubles: true, fx: { wideGuard: true } }],
+  whitebeard: [{ name: "Pops' Aegis", type: 'TREMOR', pow: 0, acc: 100, prio: 3, doubles: true, fx: { wideGuard: true } }],
+  hancock:    [{ name: 'Salome Shield', type: 'HAKI', pow: 0, acc: 100, prio: 3, doubles: true, fx: { wideGuard: true } }],
+  jinbe:      [{ name: 'Sea-Wall Stance', type: 'SEA', pow: 0, acc: 100, prio: 3, doubles: true, fx: { wideGuard: true } }],
+};
+
 for (const c of CHARACTERS) {
   if (EXTRA_MOVES[c.id]) c.moves.push(...EXTRA_MOVES[c.id].map(m => ({ ...m })));
   c.moves.push({ ...PROTECT_MOVE });
+  if (FIELD_MOVES[c.id]) c.moves.push(...FIELD_MOVES[c.id].map(m => ({ ...m })));
   if (DOUBLES_MOVES[c.id]) c.moves.push(...DOUBLES_MOVES[c.id].map(m => ({ ...m })));
+  if (WIDE_GUARD[c.id]) c.moves.push(...WIDE_GUARD[c.id].map(m => ({ ...m })));
 }
+
+/* ---- Physical / Special stat split ----
+   Each fighter declares an offensive style and a defensive bias; we split
+   the base atk into Attack/Sp.Atk and base def into Defense/Sp.Def around
+   those leanings. The PRIMARY offense keeps the old Attack value (so a
+   fighter's main moves hit as hard as before) and average defense is
+   preserved — the split adds matchup depth without upending the hierarchy.
+   off: 'phys' | 'spec' | 'mixed' ; bulk: 'phys' | 'spec' | 'even'. */
+const STYLE = {
+  luffy: { off: 'phys', bulk: 'even' }, zoro: { off: 'phys', bulk: 'even' },
+  nami: { off: 'spec', bulk: 'even' }, usopp: { off: 'phys', bulk: 'even' },
+  sanji: { off: 'phys', bulk: 'even' }, chopper: { off: 'phys', bulk: 'phys' },
+  robin: { off: 'phys', bulk: 'even' }, franky: { off: 'phys', bulk: 'phys' },
+  brook: { off: 'spec', bulk: 'spec' }, jinbe: { off: 'spec', bulk: 'phys' },
+  garp: { off: 'phys', bulk: 'phys' }, akainu: { off: 'spec', bulk: 'phys' },
+  aokiji: { off: 'spec', bulk: 'even' }, kizaru: { off: 'spec', bulk: 'spec' },
+  magellan: { off: 'spec', bulk: 'phys' }, mihawk: { off: 'phys', bulk: 'even' },
+  crocodile: { off: 'spec', bulk: 'even' }, doflamingo: { off: 'phys', bulk: 'even' },
+  hancock: { off: 'spec', bulk: 'spec' }, law: { off: 'spec', bulk: 'even' },
+  shanks: { off: 'phys', bulk: 'even' }, whitebeard: { off: 'phys', bulk: 'phys' },
+  ace: { off: 'spec', bulk: 'even' }, marco: { off: 'spec', bulk: 'spec' },
+  blackbeard: { off: 'spec', bulk: 'even' }, kaido: { off: 'phys', bulk: 'phys' },
+  bigmom: { off: 'spec', bulk: 'even' }, enel: { off: 'spec', bulk: 'spec' },
+  buggy: { off: 'phys', bulk: 'even' }, roger: { off: 'phys', bulk: 'even' },
+  rocks: { off: 'spec', bulk: 'even' }, imu: { off: 'spec', bulk: 'spec' },
+  loki: { off: 'spec', bulk: 'phys' },
+};
+function deriveStats(c) {
+  const s = c.stats, st = STYLE[c.id] || { off: 'mixed', bulk: 'even' };
+  const r = v => Math.round(v);
+  let atk, satk;
+  if (st.off === 'phys') { atk = s.atk; satk = r(s.atk * 0.6); }
+  else if (st.off === 'spec') { satk = s.atk; atk = r(s.atk * 0.6); }
+  else { atk = r(s.atk * 0.92); satk = r(s.atk * 0.92); }
+  let def, sdef;
+  if (st.bulk === 'phys') { def = r(s.def * 1.12); sdef = r(s.def * 0.88); }
+  else if (st.bulk === 'spec') { sdef = r(s.def * 1.12); def = r(s.def * 0.88); }
+  else { def = s.def; sdef = s.def; }
+  c.stats = { hp: s.hp, atk, def, satk, sdef, spd: s.spd };
+}
+for (const c of CHARACTERS) deriveStats(c);
+
+/* tag every move with its damage class */
+for (const c of CHARACTERS) for (const m of c.moves) m.cat = moveCategory(m);
 
 const CHAR_BY_ID = {};
 for (const c of CHARACTERS) CHAR_BY_ID[c.id] = c;
@@ -610,10 +684,12 @@ function realStats(base) {
     hp: base.hp + 60 + 50,          // chunky HP pools
     atk: base.atk + 5,
     def: base.def + 5,
+    satk: base.satk + 5,
+    sdef: base.sdef + 5,
     spd: base.spd + 5,
   };
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { TYPES, TYPE_CHART, typeEffectiveness, CHARACTERS, CHAR_BY_ID, PRESET_CREWS, RIVALRIES, CREW_SIZE, LEVEL, realStats };
+  module.exports = { TYPES, TYPE_CHART, TYPE_CATEGORY, moveCategory, typeEffectiveness, CHARACTERS, CHAR_BY_ID, PRESET_CREWS, RIVALRIES, CREW_SIZE, LEVEL, realStats };
 }
