@@ -32,13 +32,17 @@ function resolveLoadout(charDef, loadout) {
 function doublesLoadout(charDef) {
   const set = charDef.moves.slice(0, 4);
   const used = new Set();
-  for (const dm of charDef.moves.filter(m => m.doubles)) {
-    if (set.includes(dm)) continue;
+  const swapIn = dm => {
+    if (set.includes(dm)) return;
     let wi = -1, wv = Infinity;
     set.forEach((m, i) => { if (used.has(i)) return; const v = m.pow || 0; if (v < wv) { wv = v; wi = i; } });
-    if (wi < 0) wi = 0;
+    if (wi < 0) return;
     set[wi] = dm; used.add(wi);
-  }
+  };
+  for (const dm of charDef.moves.filter(m => m.doubles)) swapIn(dm);
+  // slow fighters with a spare slot also bring Trick Room (keep 2+ attacks)
+  const tr = charDef.moves.find(m => m.fx && m.fx.trickRoom);
+  if (tr && charDef.stats.spd <= 70 && used.size < 2 && set.filter(m => m.pow > 0).length >= 3) swapIn(tr);
   return set;
 }
 

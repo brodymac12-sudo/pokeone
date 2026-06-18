@@ -24,13 +24,16 @@ function defaultLoadout(id) {
   if (UI.mode === 'doubles' && c) {
     const set = [0, 1, 2, 3];
     const used = new Set();
-    c.moves.forEach((m, i) => {
-      if (!m.doubles) return;
+    const swapIn = i => {
+      if (set.includes(i)) return;
       let wi = -1, wv = Infinity;
       set.forEach((idx, k) => { if (used.has(k)) return; const v = c.moves[idx].pow || 0; if (v < wv) { wv = v; wi = k; } });
-      if (wi < 0) wi = 0;
+      if (wi < 0) return;
       set[wi] = i; used.add(wi);
-    });
+    };
+    c.moves.forEach((m, i) => { if (m.doubles) swapIn(i); });
+    const tr = c.moves.findIndex(m => m.fx && m.fx.trickRoom);
+    if (tr >= 0 && c.stats.spd <= 70 && used.size < 2 && set.filter(k => c.moves[k].pow > 0).length >= 3) swapIn(tr);
     return set;
   }
   return [0, 1, 2, 3];
