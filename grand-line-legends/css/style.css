@@ -383,6 +383,14 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 400; letter-spacing:
 @keyframes awakenFlash { 0% { filter: brightness(1); transform: scale(1); } 30% { filter: brightness(2.6) saturate(1.4) drop-shadow(0 0 18px #f0c93a); transform: scale(1.22); } 100% { filter: brightness(1); transform: scale(1); } }
 .sprite-wrap.awaken-flash { animation: awakenFlash 0.7s ease; }
 #battle-log .awaken-line, #d-battle-log .awaken-line { color: #f0c93a; font-weight: 700; }
+.moves-grid.awaken-preview .move-btn:not(.btn-awaken):not(.d-switch-btn) { border-color: rgba(240, 201, 58, 0.7); box-shadow: 0 0 10px rgba(240, 201, 58, 0.25) inset; }
+
+/* ---- Awakening panel (library / builder detail) ---- */
+.awaken-box { margin-top: 12px; border: 1px solid rgba(240, 201, 58, 0.4); border-radius: 12px; padding: 10px 12px; background: linear-gradient(180deg, rgba(240, 201, 58, 0.1), rgba(179, 75, 214, 0.06)); }
+.awaken-box .awaken-title { font-weight: 800; color: #f0c93a; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.awaken-box .awaken-sub { font-size: 11.5px; color: #c9b8e0; margin: 5px 0 7px; }
+.awaken-box .awaken-stats { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.awaken-box .aw-stat { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 6px; background: rgba(94, 234, 212, 0.16); color: #5eead4; border: 1px solid rgba(94, 234, 212, 0.4); }
 
 /* ---- saved teams bar ---- */
 .saved-teams { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin: 4px 0 12px; }

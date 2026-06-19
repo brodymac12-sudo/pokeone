@@ -576,8 +576,13 @@ function renderMoves() {
   const f = fighter('player');
   const enemy = fighter('enemy');
   const grid = $('#moves-grid');
+  // when an Awakening is armed, preview the awakened moveset so the player
+  // chooses (and uses) a special move on the very turn they transform
+  const previewing = UI.awakenPending && UI.battle && UI.battle.canAwaken('player') && f.def.awaken;
+  const moveList = previewing ? f.def.awaken.moves : f.moves;
+  grid.classList.toggle('awaken-preview', !!previewing);
   grid.innerHTML = '';
-  f.moves.forEach((m, i) => {
+  moveList.forEach((m, i) => {
     const b = document.createElement('button');
     b.className = 'move-btn';
     b.style.borderLeft = `4px solid ${TYPES[m.type].color}`;
@@ -911,8 +916,9 @@ function renderLibGrid() {
     chip.appendChild(makeSpriteCanvas(c.id, 4, false));
     const nm = document.createElement('span');
     nm.className = 'nm';
-    nm.textContent = shortName(c);
+    nm.textContent = (c.awaken ? '⚡ ' : '') + shortName(c);
     chip.appendChild(nm);
+    if (c.awaken) chip.title = 'Can Awaken — ' + c.awaken.name;
     const bst = document.createElement('span');
     bst.className = 'lib-bst';
     bst.textContent = 'BST ' + bstOf(c);
@@ -960,8 +966,27 @@ function renderLibDetail(id) {
     </div>
     <div class="detail-moves">
       ${c.moves.map(m => moveRowHTML(m)).join('')}
-    </div>`;
+    </div>
+    ${awakenSectionHTML(c)}`;
   $('#lib-sprite').appendChild(makeSpriteCanvas(id, 7, false));
+}
+
+/* The Awakening panel: shown for the eleven fighters that can transform. */
+function awakenSectionHTML(c) {
+  const aw = c.awaken;
+  if (!aw) return '';
+  const statChips = Object.entries(aw.stats || {})
+    .map(([s, v]) => `<span class="aw-stat">+${v} ${STAT_LABELS[s] || s.toUpperCase()}</span>`).join('');
+  const newTypes = (aw.types || c.types).map(t => typeBadge(t, true)).join(' ');
+  const ability = aw.ability
+    ? `<b>★ ${aw.ability.name}</b> — ${aw.ability.desc}`
+    : `<b>★ ${c.ability.name}</b> — keeps its signature ability`;
+  return `<div class="awaken-box">
+    <div class="awaken-title">⚡ Awakening · ${aw.name} ${newTypes}</div>
+    ${statChips ? `<div class="awaken-stats">${statChips}</div>` : ''}
+    <div class="awaken-sub">${ability}</div>
+    <div class="detail-moves">${aw.moves.map(m => moveRowHTML(m)).join('')}</div>
+  </div>`;
 }
 
 /* ============================ TOURNAMENT ============================ */
@@ -1351,10 +1376,15 @@ function dShowCurrentMoves() {
   $('#d-prompt').textContent = `▶ Choose ${shortName(f.def)}'s action`;
   dRenderMoves(f);
 }
+function dActiveMoveList(f) {
+  const armed = UI.dbl.awakenArmed && UI.dbl.battle.canAwaken('player', UI.dbl.curSlot) && f.def.awaken;
+  return armed ? f.def.awaken.moves : f.moves;
+}
 function dRenderMoves(f) {
   const grid = $('#d-moves-grid'); grid.innerHTML = '';
+  grid.classList.toggle('awaken-preview', dActiveMoveList(f) !== f.moves);
   const enemies = UI.dbl.battle.livingPositions('enemy');
-  f.moves.forEach((m, i) => {
+  dActiveMoveList(f).forEach((m, i) => {
     const b = document.createElement('button');
     b.className = 'move-btn'; b.style.borderLeft = `4px solid ${TYPES[m.type].color}`;
     let effHint = '';
@@ -1395,7 +1425,7 @@ function dAvailableBench() {
 function dPickMove(idx) {
   if (UI.dbl.busy) return;
   const f = dFighterAt('player', UI.dbl.curSlot);
-  const mv = f.moves[idx], fx = mv.fx || {};
+  const mv = dActiveMoveList(f)[idx], fx = mv.fx || {};
   // spread / team / ally / redirect choose no target; single-target attacks & debuffs do
   const needsTarget = !fx.spread && (mv.pow > 0 || fx.enemy || fx.sleep || fx.stun);
   const enemies = UI.dbl.battle.livingPositions('enemy');
@@ -1533,7 +1563,7 @@ function initUI() {
     if (UI.busy || !UI.battle || !UI.battle.canAwaken('player')) return;
     SFX.click();
     UI.awakenPending = !UI.awakenPending;
-    updateAwakenButton();
+    renderMoves();   // re-render to preview (or restore) the awakened moveset
   });
   $('#btn-switch').addEventListener('click', () => { if (!UI.busy) { SFX.click(); openSwitchModal(false); } });
   $('#btn-switch-cancel').addEventListener('click', closeSwitchModal);
