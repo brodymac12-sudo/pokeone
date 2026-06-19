@@ -289,8 +289,17 @@ for (let i = 0; i < CHARACTERS.length; i++) {
 /* ---- Awakenings (Mega-style, once per battle) ---- */
 {
   const CB = sandbox.CHAR_BY_ID;
-  const ids = ['luffy', 'zoro', 'sanji', 'law', 'doflamingo', 'kaido', 'crocodile'];
-  check(ids.every(id => CB[id].awaken && CB[id].awaken.moves && CB[id].awaken.moves.length === 4), 'seven fighters have a 4-move Awakening');
+  const ids = ['luffy', 'zoro', 'sanji', 'law', 'doflamingo', 'kaido', 'crocodile', 'shanks', 'roger', 'rocks', 'imu'];
+  check(ids.every(id => CB[id].awaken && CB[id].awaken.moves && CB[id].awaken.moves.length === 4), 'eleven fighters have a 4-move Awakening');
+  // every awakening is well-formed: valid types, a damage class on each move, sensible stat boosts
+  for (const id of ids) {
+    const aw = CB[id].awaken;
+    check(aw.types.every(t => sandbox.TYPES[t]), `${id} awakening: valid types`);
+    check(aw.moves.every(m => m.cat === 'physical' || m.cat === 'special'), `${id} awakening: moves labelled`);
+    check(aw.stats && Object.values(aw.stats).reduce((s, v) => s + v, 0) > 0, `${id} awakening: net stat gain`);
+  }
+  // Roger's awakening keeps his signature pierce ability (no override)
+  check(!CB['roger'].awaken.ability, 'Roger awakening keeps Pirate King Haki');
 
   // single battle: Luffy awakens and changes stats / ability / moveset
   const b = new sandbox.Battle(['luffy', 'zoro'], ['buggy', 'nami']);

@@ -731,6 +731,50 @@ const AWAKENINGS = {
       { name: 'Barjan', type: 'SAND', pow: 95, acc: 100, fx: { poison: 30 } },
     ],
   },
+  shanks: {
+    name: 'Supreme King · Conqueror Advent', types: ['SLASH', 'HAKI'],
+    stats: { atk: 30, spd: 22, def: 14, sdef: 8 },
+    ability: { name: 'Supreme Conqueror', kind: 'superCrit', bonus: 20, mult: 2.5, desc: 'Haki-charged blade — +20% crit chance, crits deal 2.5×.' },
+    moves: [
+      { name: 'Divine Departure', type: 'HAKI', pow: 130, acc: 90, fx: { stun: 20 } },
+      { name: 'Gryphon Supreme Slash', type: 'SLASH', pow: 120, acc: 90, fx: { critBoost: 25 } },
+      { name: 'Conqueror Advent', type: 'HAKI', pow: 100, acc: 95, fx: { enemy: { atk: -1, def: -1 }, enemyChance: 50 } },
+      { name: 'Red Force', type: 'SLASH', pow: 110, acc: 95, fx: { critBoost: 25 } },
+    ],
+  },
+  roger: {
+    name: 'Pirate King · Final Will', types: ['SLASH', 'HAKI'],
+    stats: { atk: 30, spd: 22, def: 14, sdef: 10 },
+    // keeps his signature Pirate King's Haki (pierce) — no ability override
+    moves: [
+      { name: 'Divine Two-Sword Slash', type: 'SLASH', pow: 125, acc: 90, fx: { critBoost: 25 } },
+      { name: 'Kamusari: Supreme', type: 'HAKI', pow: 135, acc: 90, fx: { enemy: { def: -1 }, enemyChance: 40 } },
+      { name: 'Clash of Kings', type: 'HAKI', pow: 105, acc: 95, fx: { stun: 30 } },
+      { name: 'Inherited Will', type: 'SLASH', pow: 110, acc: 95, fx: { critBoost: 25 } },
+    ],
+  },
+  rocks: {
+    name: 'God Valley Demon · Domi Reversi', types: ['DARKNESS', 'HAKI'],
+    stats: { satk: 30, atk: 14, spd: 18, def: 12 },
+    ability: { name: 'Demon Sovereign', kind: 'lifesteal', frac: 0.3, desc: 'Devours the fallen — heals 30% of all damage dealt.' },
+    moves: [
+      { name: 'God Valley Cataclysm', type: 'HAKI', pow: 135, acc: 85, fx: { recoil: 12 } },
+      { name: "Demon's Rampage", type: 'DARKNESS', pow: 120, acc: 90, fx: { enemy: { def: -1 }, enemyChance: 30 } },
+      { name: "Davy's Grudge", type: 'DARKNESS', pow: 105, acc: 95, fx: { drain: 40 } },
+      { name: 'Tyrant Ambition', type: 'HAKI', pow: 100, acc: 100, fx: { stun: 20 } },
+    ],
+  },
+  imu: {
+    name: 'Ruler of the Void · True Form', types: ['DARKNESS', 'LIGHT'],
+    stats: { satk: 30, sdef: 16, def: 12, spd: 14 },
+    ability: { name: 'Eternal Throne', kind: 'immortal', frac: 0.15, desc: 'Immortal sovereign — regenerates 15% HP each turn; immune to burn & poison.' },
+    moves: [
+      { name: 'Mother Flame: Apocalypse', type: 'LIGHT', pow: 130, acc: 90, fx: { burn: 20 } },
+      { name: 'Spider of the Void', type: 'DARKNESS', pow: 110, acc: 95, fx: { stun: 20 } },
+      { name: 'Holy Decree', type: 'SOUL', pow: 100, acc: 95, fx: { enemy: { atk: -1 }, enemyChance: 50 } },
+      { name: 'Void Devourer', type: 'DARKNESS', pow: 105, acc: 95, fx: { drain: 30 } },
+    ],
+  },
 };
 const CHAR_BY_ID = {};
 for (const c of CHARACTERS) CHAR_BY_ID[c.id] = c;
