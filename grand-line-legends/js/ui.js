@@ -10,6 +10,7 @@ const UI = {
   opponentChoice: 'random',
   selectedPreset: null,
   busy: false,
+  awakenPending: false,  // player armed an Awakening for the next move
   muted: localStorage.getItem('gll-muted') === '1',
   lastCrews: null,       // for rematch
 };
@@ -46,6 +47,10 @@ function loadoutMoves(id) {
   const c = CHAR_BY_ID[id];
   return ensureLoadout(id).map(i => c.moves[i]).filter(Boolean);
 }
+
+/* a fighter's live types / ability (an Awakening overrides them) */
+function uiTypes(f) { return f.types || f.def.types; }
+function uiAbility(f) { return f.ability || f.def.ability; }
 
 const $ = sel => document.querySelector(sel);
 const $$ = sel => [...document.querySelectorAll(sel)];
@@ -483,6 +488,7 @@ function renderCombatant(sideKey) {
   const zone = $(sideKey === 'player' ? '#player-zone' : '#enemy-zone');
   const wrap = zone.querySelector('.sprite-wrap');
   wrap.classList.remove('fainted-anim');
+  wrap.classList.toggle('awakened-aura', !!f.awakened);
   wrap.innerHTML = '';
   wrap.appendChild(makeSpriteCanvas(f.def.id, sideKey === 'player' ? 9 : 7, sideKey === 'player'));
   renderCard(sideKey);
@@ -491,14 +497,15 @@ function renderCombatant(sideKey) {
 function renderCard(sideKey) {
   const f = fighter(sideKey);
   const card = $(sideKey === 'player' ? '#player-card' : '#enemy-card');
+  const ab = uiAbility(f);
   card.innerHTML = `
     <div class="row1">
-      <span class="fname">${f.name}</span>
+      <span class="fname">${f.awakened ? '⚡ ' : ''}${f.name}</span>
       <span class="status-chip"></span>
     </div>
     <div class="types-row">
-      ${f.def.types.map(t => typeBadge(t, true)).join('')}
-      <span class="ability-tag" title="${f.def.ability.desc}">★ ${f.def.ability.name}</span>
+      ${uiTypes(f).map(t => typeBadge(t, true)).join('')}
+      <span class="ability-tag" title="${ab.desc}">★ ${ab.name}</span>
     </div>
     <div class="stage-row"></div>
     <div class="hp-track"><div class="hp-fill"></div></div>
@@ -591,16 +598,33 @@ function renderMoves() {
     grid.appendChild(b);
   });
   setActionsEnabled(!UI.busy);
+  updateAwakenButton();
+}
+
+function updateAwakenButton() {
+  const btn = $('#btn-awaken');
+  if (!btn) return;
+  const can = UI.battle && !UI.battle.over && UI.battle.canAwaken && UI.battle.canAwaken('player');
+  btn.style.display = can ? '' : 'none';
+  if (!can) { UI.awakenPending = false; return; }
+  const aw = fighter('player').def.awaken;
+  btn.classList.toggle('armed', UI.awakenPending);
+  btn.textContent = UI.awakenPending ? '⚡ Awakening!' : '⚡ Awaken';
+  btn.title = aw ? aw.name : '';
+  btn.disabled = UI.busy;
 }
 
 function setActionsEnabled(on) {
   $$('#moves-grid .move-btn').forEach(b => b.disabled = !on);
   $('#btn-switch').disabled = !on;
   $('#btn-forfeit').disabled = !on;
+  const aw = $('#btn-awaken'); if (aw) aw.disabled = !on;
 }
 
 async function takeAction(action) {
   if (UI.busy || !UI.battle || UI.battle.over || UI.battle.awaitingReplace) return;
+  if (UI.awakenPending && action.type === 'move' && UI.battle.canAwaken('player')) action.awaken = true;
+  UI.awakenPending = false;
   UI.busy = true;
   setActionsEnabled(false);
   const events = UI.battle.playTurn(action);
@@ -708,6 +732,18 @@ async function playEvents(events) {
         else renderMoves(); // refresh eff hints vs new enemy
         await sleep(420);
         break;
+
+      case 'awaken': {
+        const wrap = $(ev.side === 'player' ? '#player-zone' : '#enemy-zone').querySelector('.sprite-wrap');
+        wrap.classList.add('awaken-flash');
+        setTimeout(() => wrap.classList.remove('awaken-flash'), 700);
+        logLine(`⚡ ${ev.name} → ${ev.awakenName}!`, 'awaken-line');
+        SFX.win();
+        renderCombatant(ev.side);   // new types/ability/glow + name
+        if (ev.side === 'player') renderMoves();
+        await sleep(900);
+        break;
+      }
 
       case 'faint': {
         const wrap = $(ev.side === 'player' ? '#player-zone' : '#enemy-zone').querySelector('.sprite-wrap');
@@ -1161,6 +1197,7 @@ function dRenderUnit(side, pos) {
   unit.classList.remove('acting', 'targetable');
   const wrap = unit.querySelector('.sprite-wrap');
   wrap.classList.remove('fainted-anim');
+  wrap.classList.toggle('awakened-aura', !!(f && f.awakened));
   wrap.innerHTML = '';
   const card = unit.querySelector('.d-card');
   if (!f) { card.innerHTML = '<div class="d-empty">— no fighter —</div>'; dRenderBench(side); return; }
@@ -1173,8 +1210,8 @@ function dRenderCard(side, pos) {
   const f = dFighterAt(side, pos);
   const card = dUnitEl(side, pos).querySelector('.d-card');
   card.innerHTML = `
-    <div class="row1"><span class="fname">${shortName(f.def)}</span><span class="status-chip"></span></div>
-    <div class="types-row">${f.def.types.map(t => typeBadge(t, true)).join('')}</div>
+    <div class="row1"><span class="fname">${f.awakened ? '⚡ ' : ''}${shortName(f.def)}</span><span class="status-chip"></span></div>
+    <div class="types-row">${uiTypes(f).map(t => typeBadge(t, true)).join('')}</div>
     <div class="stage-row"></div>
     <div class="hp-track"><div class="hp-fill"></div></div>
     <div class="hp-num"></div>`;
@@ -1249,6 +1286,14 @@ async function dPlayEvents(events) {
       }
       case 'log': dLog(ev.msg); await sleep(ev.move ? 300 : 360); break;
       case 'switch': dRenderUnit(ev.side, ev.slot); SFX.status(); await sleep(360); break;
+      case 'awaken': {
+        const wrap = dUnitEl(ev.side, ev.slot) && dUnitEl(ev.side, ev.slot).querySelector('.sprite-wrap');
+        if (wrap) { wrap.classList.add('awaken-flash'); setTimeout(() => wrap.classList.remove('awaken-flash'), 700); }
+        dLog(`⚡ ${ev.name} → ${ev.awakenName}!`);
+        SFX.win();
+        dRenderUnit(ev.side, ev.slot);
+        await sleep(900); break;
+      }
       case 'anim': {
         const wrap = dUnitEl(ev.side, ev.slot) && dUnitEl(ev.side, ev.slot).querySelector('.sprite-wrap');
         if (!wrap) break;
@@ -1296,6 +1341,7 @@ function dNextInput() {
   if (!UI.dbl.queue.length) { dResolveRound(); return; }
   UI.dbl.curSlot = UI.dbl.queue.shift();
   UI.dbl.pendingIdx = null;
+  UI.dbl.awakenArmed = false;
   UI.dbl.busy = false;
   dUnitEl('player', UI.dbl.curSlot).classList.add('acting');
   dShowCurrentMoves();
@@ -1325,6 +1371,14 @@ function dRenderMoves(f) {
     b.addEventListener('click', () => dPickMove(i));
     grid.appendChild(b);
   });
+  if (UI.dbl.battle.canAwaken('player', UI.dbl.curSlot)) {
+    const aw = document.createElement('button');
+    aw.className = 'move-btn btn-awaken' + (UI.dbl.awakenArmed ? ' armed' : '');
+    const name = f.def.awaken ? f.def.awaken.name : '';
+    aw.innerHTML = `<span class="mv-name">⚡ ${UI.dbl.awakenArmed ? 'Awakening armed!' : 'Awaken'}</span><span class="mv-meta">${name} — applies before your move</span>`;
+    aw.addEventListener('click', () => { SFX.click(); UI.dbl.awakenArmed = !UI.dbl.awakenArmed; dShowCurrentMoves(); });
+    grid.appendChild(aw);
+  }
   if (dAvailableBench().length) {
     const sw = document.createElement('button');
     sw.className = 'move-btn d-switch-btn';
@@ -1365,7 +1419,9 @@ function dClearTargetable() {
   });
 }
 function dRecord(idx, target) {
-  UI.dbl.pending.push({ pos: UI.dbl.curSlot, type: 'move', idx, target });
+  const act = { pos: UI.dbl.curSlot, type: 'move', idx, target };
+  if (UI.dbl.awakenArmed && UI.dbl.battle.canAwaken('player', UI.dbl.curSlot)) act.awaken = true;
+  UI.dbl.pending.push(act);
   SFX.click();
   dClearTargetable();
   dNextInput();
@@ -1473,6 +1529,12 @@ function initUI() {
     if (confirm('Strike your colors and forfeit this 2v2?')) dShowResult('enemy');
   });
 
+  $('#btn-awaken').addEventListener('click', () => {
+    if (UI.busy || !UI.battle || !UI.battle.canAwaken('player')) return;
+    SFX.click();
+    UI.awakenPending = !UI.awakenPending;
+    updateAwakenButton();
+  });
   $('#btn-switch').addEventListener('click', () => { if (!UI.busy) { SFX.click(); openSwitchModal(false); } });
   $('#btn-switch-cancel').addEventListener('click', closeSwitchModal);
   $('#btn-forfeit').addEventListener('click', () => {

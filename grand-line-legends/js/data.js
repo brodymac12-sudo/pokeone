@@ -647,8 +647,98 @@ for (const c of CHARACTERS) deriveStats(c);
 /* tag every move with its damage class */
 for (const c of CHARACTERS) for (const m of c.moves) m.cat = moveCategory(m);
 
+/* ============================================================
+   AWAKENINGS — One Piece's answer to Mega Evolution.
+   Once per battle a side may awaken ONE of these fighters: it gains
+   stat boosts, may change typing, swaps to a stronger awakened ability,
+   and unlocks a brand-new moveset. The transformation lasts the battle.
+   `stats` values are flat boosts added to the fighter's battle stats. */
+const AWAKENINGS = {
+  luffy: {
+    name: 'Gear 5 · Sun God Nika', types: ['RUBBER', 'HAKI'],
+    stats: { atk: 32, spd: 30, def: 14, sdef: 10 },
+    ability: { name: 'Liberation', kind: 'dodge', chance: 25, desc: 'Cartoon freedom — 25% chance to dodge any attack.' },
+    moves: [
+      { name: 'Gum-Gum Dawn Whip', type: 'RUBBER', pow: 100, acc: 100, fx: { enemy: { def: -1 }, enemyChance: 30 } },
+      { name: 'Gum-Gum Giant', type: 'RUBBER', pow: 120, acc: 95, fx: { stun: 20 } },
+      { name: 'Bajrang Gun', type: 'HAKI', pow: 145, acc: 90, fx: { recoil: 15 } },
+      { name: 'Gum-Gum Lightning', type: 'HAKI', pow: 95, acc: 100, fx: { stun: 30 } },
+    ],
+  },
+  zoro: {
+    name: 'King of Hell · Asura', types: ['SLASH', 'SOUL'],
+    stats: { atk: 32, spd: 16, satk: 10, sdef: 8 },
+    ability: { name: 'Demon Asura', kind: 'superCrit', bonus: 25, mult: 2.5, desc: 'Nine-sword demon — +25% crit chance, crits deal 2.5×.' },
+    moves: [
+      { name: 'Asura: Makyusen', type: 'SLASH', pow: 130, acc: 90, fx: { critBoost: 25 } },
+      { name: 'King of Hell: Three Worlds', type: 'HAKI', pow: 120, acc: 90, fx: { stun: 20 } },
+      { name: 'Black Rope: Dragon Twister', type: 'SLASH', pow: 110, acc: 90, fx: { enemy: { def: -1 }, enemyChance: 30 } },
+      { name: 'Death Lion Song', type: 'SOUL', pow: 95, acc: 100, fx: { critBoost: 25 } },
+    ],
+  },
+  sanji: {
+    name: 'Ifrit Jambe · Exoskeleton', types: ['STRIKE', 'FLAME'],
+    stats: { atk: 26, spd: 26, def: 12, satk: 12 },
+    ability: { name: 'Exoskeleton', kind: 'typeBoost', type: 'FLAME', mult: 1.5, burnImmune: true, desc: 'Blue-flame Ifrit — Flame moves +50%, immune to burn.' },
+    moves: [
+      { name: 'Ifrit Jambe: Premier Hachis', type: 'FLAME', pow: 115, acc: 100, fx: { burn: 30 } },
+      { name: 'Diable: Concasse', type: 'STRIKE', pow: 115, acc: 95, fx: { stun: 20 } },
+      { name: 'Hell Memories', type: 'FLAME', pow: 130, acc: 90, fx: { burn: 30 } },
+      { name: 'Sky Walk', type: 'STRIKE', pow: 0, acc: 100, fx: { self: { spd: 2 } } },
+    ],
+  },
+  law: {
+    name: 'Awakening · Puncture Wille', types: ['SLASH', 'SOUL'],
+    stats: { satk: 32, spd: 22, def: 12, sdef: 10 },
+    ability: { name: 'K-Room', kind: 'ignoreBuffs', desc: 'Awakened ROOM — attacks ignore the foe\'s defensive boosts.' },
+    moves: [
+      { name: 'Puncture Wille', type: 'SOUL', pow: 130, acc: 90, fx: { ignoreDef: true } },
+      { name: 'Countershock', type: 'LIGHTNING', pow: 100, acc: 100, fx: { para: 30 } },
+      { name: 'Gamma Knife', type: 'SOUL', pow: 115, acc: 90, fx: { ignoreDef: true } },
+      { name: 'Silent Shock', type: 'SLASH', pow: 95, acc: 100, fx: { stun: 20 } },
+    ],
+  },
+  doflamingo: {
+    name: 'Awakening · String City', types: ['SLASH', 'SOUL'],
+    stats: { atk: 26, spd: 22, def: 16, sdef: 10 },
+    ability: { name: 'String City', kind: 'bonusStun', chance: 30, desc: 'Awakened strings — 30% chance to puppet-stun on every hit.' },
+    moves: [
+      { name: 'God Thread: Awakened', type: 'SLASH', pow: 120, acc: 90, fx: { critBoost: 25 } },
+      { name: 'White Snake', type: 'SLASH', pow: 105, acc: 95, fx: { enemy: { def: -1 }, enemyChance: 30 } },
+      { name: 'Spider Web', type: 'SOUL', pow: 95, acc: 100, fx: { stun: 20 } },
+      { name: 'Off-White Bulwark', type: 'SLASH', pow: 0, acc: 100, fx: { self: { def: 2 } } },
+    ],
+  },
+  kaido: {
+    name: 'Hybrid · Azure Dragon', types: ['BEAST', 'TREMOR'],
+    stats: { atk: 30, def: 16, sdef: 12, satk: 10 },
+    ability: { name: 'Sky Dragon Hide', kind: 'scales', mult: 0.6, desc: 'Indestructible dragon — takes 40% less damage above half HP.' },
+    moves: [
+      { name: 'Dragon Twister: Tempest', type: 'BEAST', pow: 115, acc: 95, fx: { enemy: { spd: -1 }, enemyChance: 30 } },
+      { name: 'Boro Breath', type: 'FLAME', pow: 110, acc: 90, fx: { burn: 30 } },
+      { name: 'Raimei Hakke', type: 'STRIKE', pow: 105, acc: 95, fx: { stun: 30 } },
+      { name: 'Conqueror Kaifu', type: 'HAKI', pow: 125, acc: 90, fx: { enemy: { def: -1 }, enemyChance: 30 } },
+    ],
+  },
+  crocodile: {
+    name: 'Awakening · Desert Empire', types: ['SAND', 'TREMOR'],
+    stats: { satk: 30, def: 16, spd: 14, sdef: 10 },
+    ability: { name: 'Desert Empire', kind: 'lifesteal', frac: 0.4, desc: 'Awakened drought — heals 40% of all damage dealt.' },
+    moves: [
+      { name: 'Ground Death', type: 'SAND', pow: 115, acc: 95, fx: { enemy: { spd: -1 }, enemyChance: 30 } },
+      { name: 'Desert Spada: Pesado', type: 'TREMOR', pow: 130, acc: 90, fx: { stun: 20 } },
+      { name: 'Sables: Requiem', type: 'SAND', pow: 100, acc: 95, fx: { enemy: { def: -1 }, enemyChance: 30 } },
+      { name: 'Barjan', type: 'SAND', pow: 95, acc: 100, fx: { poison: 30 } },
+    ],
+  },
+};
 const CHAR_BY_ID = {};
 for (const c of CHARACTERS) CHAR_BY_ID[c.id] = c;
+for (const id in AWAKENINGS) {
+  const aw = AWAKENINGS[id];
+  if (aw.moves) for (const m of aw.moves) m.cat = moveCategory(m);
+  if (CHAR_BY_ID[id]) CHAR_BY_ID[id].awaken = aw;
+}
 
 /* Preset pirate crews (teams of 4) */
 const PRESET_CREWS = [

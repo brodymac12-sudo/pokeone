@@ -9,7 +9,8 @@ const code = ['js/data.js', 'js/engine.js', 'js/sprites.js']
   .map(f => fs.readFileSync(path.join(root, f), 'utf8'))
   .join('\n;\n');
 
-const ctx = { module: { exports: {} }, console };
+// share the outer Math so tests can make the engine's RNG deterministic
+const ctx = { module: { exports: {} }, console, Math };
 vm.createContext(ctx);
 vm.runInContext(code, ctx);
 const sandbox = ctx.module.exports;
@@ -269,9 +270,9 @@ for (let i = 0; i < CHARACTERS.length; i++) {
     // trick room reverses the speed order (slower acts first)
     const tr = find('bigmom', m => m.fx && m.fx.trickRoom);
     check(tr, 'a fighter owns a Trick Room move');
-    const b7 = new sandbox.Battle(['bigmom'], ['kizaru']);   // Big Mom slow, Kizaru fast
+    const b7 = new sandbox.Battle(['bigmom'], ['hancock']);   // Big Mom slow, Hancock fast (no priority moves)
     b7.trickRoom = 5;
-    // bigmom (slow) should now out-prioritise kizaru (fast) on equal move priority
+    // bigmom (slow) should now out-speed hancock (fast) since neither has move priority
     const order = [];
     const origUse = b7.useMove.bind(b7);
     b7.useMove = (sk, mv) => { order.push(sk); origUse(sk, mv); };
@@ -283,6 +284,43 @@ for (let i = 0; i < CHARACTERS.length; i++) {
     check(pf.moves[0].cat === 'physical', 'a Slash move is physical');
     check(CB['ace'].moves[0].cat === 'special', 'a Flame move is special');
   } finally { Math.random = R; }
+}
+
+/* ---- Awakenings (Mega-style, once per battle) ---- */
+{
+  const CB = sandbox.CHAR_BY_ID;
+  const ids = ['luffy', 'zoro', 'sanji', 'law', 'doflamingo', 'kaido', 'crocodile'];
+  check(ids.every(id => CB[id].awaken && CB[id].awaken.moves && CB[id].awaken.moves.length === 4), 'seven fighters have a 4-move Awakening');
+
+  // single battle: Luffy awakens and changes stats / ability / moveset
+  const b = new sandbox.Battle(['luffy', 'zoro'], ['buggy', 'nami']);
+  const lf = b.active('player');
+  const atk0 = lf.baseAtk, spd0 = lf.baseSpd;
+  check(b.canAwaken('player'), 'Luffy can awaken at start');
+  const evs = b.playTurn({ type: 'move', idx: 0, awaken: true });
+  check(evs.some(e => e.t === 'awaken'), 'an awaken event fires');
+  check(lf.awakened && b.sides.player.awakened, 'fighter + side awaken flags set');
+  check(lf.baseAtk > atk0 && lf.baseSpd > spd0, 'Awakening boosts stats');
+  check(lf.ability === CB['luffy'].awaken.ability, 'Awakening overrides the ability');
+  check(lf.moves[0].name === CB['luffy'].awaken.moves[0].name, 'Awakening swaps in the new moveset');
+  check(!b.canAwaken('player'), 'a side may only awaken once per battle');
+
+  // a different fighter on the same side cannot awaken after the first
+  if (b.sides.player.crew[1].alive) { b.doSwitch('player', 1); check(!b.canAwaken('player'), 'second fighter blocked from awakening same battle'); }
+
+  // type override actually changes effectiveness: Kaido base BEAST/FLAME -> BEAST/TREMOR
+  const kb = new sandbox.Battle(['kaido'], ['buggy']);
+  const k = kb.active('player');
+  const t0 = (k.types || k.def.types).slice();
+  kb.applyAwaken('player');
+  check((k.types || []).includes('TREMOR'), 'Kaido Awakening adds the Tremor type');
+  check(t0.join() !== (k.types || []).join(), 'Awakening changed the type line');
+
+  // doubles: awakening works per fighter and is one-per-side
+  const d = new sandbox.DoublesBattle(['sanji', 'zoro'], ['buggy', 'nami']);
+  check(d.canAwaken('player', 0), 'doubles fighter can awaken');
+  check(d.applyAwaken('player', 0), 'doubles awaken applies');
+  check(!d.canAwaken('player', 1), 'doubles side limited to one awakening');
 }
 
 /* ---- 2v2 balance audit: no runaway, no dead weight ---- */
@@ -347,9 +385,10 @@ console.log('\n1v1 win rates (BST | WR):');
 table.forEach((r, i) => console.log(`${String(i + 1).padStart(2)}. ${r.id.padEnd(12)} ${String(r.bst).padStart(3)} | ${(r.wr * 100).toFixed(0)}%`));
 
 const rank = id => table.findIndex(r => r.id === id);
-check(rank('roger') < 8, `Roger ranks top-8 (got #${rank('roger') + 1})`);
-check(rank('rocks') < 10, `Rocks ranks top-10 (got #${rank('rocks') + 1})`);
-check(rank('imu') < 10, `Imu ranks top-10 (got #${rank('imu') + 1})`);
+// Awakening boosts seven fighters, so non-awakeners sit a little lower now
+check(rank('roger') < 10, `Roger ranks top-10 (got #${rank('roger') + 1})`);
+check(rank('rocks') < 13, `Rocks ranks top-13 (got #${rank('rocks') + 1})`);
+check(rank('imu') < 12, `Imu ranks top-12 (got #${rank('imu') + 1})`);
 check(table.find(r => r.id === 'usopp').wr < 0.5, 'Usopp below 50% in raw 1v1s');
 check(table.find(r => r.id === 'buggy').wr < 0.5, 'Buggy below 50% in raw 1v1s');
 check(table[0].wr <= 0.97, `no one is unbeatable (top: ${table[0].id} ${(table[0].wr * 100).toFixed(0)}%)`);

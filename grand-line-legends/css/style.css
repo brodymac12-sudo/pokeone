@@ -371,6 +371,19 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 400; letter-spacing:
 .d-switch-btn .mv-meta { color: #9fb8d4; }
 .dbl-tag { color: var(--gold); font-weight: 800; font-size: 11px; }
 
+/* ---- Awakening (Mega-style) ---- */
+.btn-awaken {
+  background: linear-gradient(135deg, #b34bd6, #e85a8a 60%, #f0c93a);
+  color: #fff; border: 1px solid rgba(240, 201, 58, 0.6); font-weight: 700;
+}
+.btn-awaken:hover:not(:disabled) { filter: brightness(1.12); }
+.btn-awaken.armed { box-shadow: 0 0 0 2px #f0c93a, 0 0 14px rgba(240, 201, 58, 0.7); animation: awakenPulse 0.9s infinite; }
+@keyframes awakenPulse { 0%, 100% { box-shadow: 0 0 0 2px #f0c93a, 0 0 10px rgba(240, 201, 58, 0.55); } 50% { box-shadow: 0 0 0 2px #fff, 0 0 20px rgba(240, 201, 58, 0.9); } }
+.sprite-wrap.awakened-aura { filter: drop-shadow(0 0 6px rgba(240, 201, 58, 0.85)) drop-shadow(0 0 12px rgba(179, 75, 214, 0.55)); }
+@keyframes awakenFlash { 0% { filter: brightness(1); transform: scale(1); } 30% { filter: brightness(2.6) saturate(1.4) drop-shadow(0 0 18px #f0c93a); transform: scale(1.22); } 100% { filter: brightness(1); transform: scale(1); } }
+.sprite-wrap.awaken-flash { animation: awakenFlash 0.7s ease; }
+#battle-log .awaken-line, #d-battle-log .awaken-line { color: #f0c93a; font-weight: 700; }
+
 /* ---- saved teams bar ---- */
 .saved-teams { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin: 4px 0 12px; }
 .saved-teams .saved-label { color: #9fb8d4; font-size: 12.5px; }

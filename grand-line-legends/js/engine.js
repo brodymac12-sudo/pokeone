@@ -46,6 +46,26 @@ function doublesLoadout(charDef) {
   return set;
 }
 
+/* A fighter's live types / ability — an Awakening can override either, so
+   read through these helpers everywhere instead of the shared char def. */
+function fTypes(f) { return f.types || f.def.types; }
+function fAbility(f) { return f.ability || f.def.ability; }
+
+/* Apply an Awakening to a Fighter instance (never mutates the shared def):
+   flat stat boosts, optional type/ability override, and a new moveset. */
+function applyAwakenStats(f, aw) {
+  if (aw.stats) {
+    if (aw.stats.atk) f.baseAtk += aw.stats.atk;
+    if (aw.stats.def) f.baseDef += aw.stats.def;
+    if (aw.stats.satk) f.baseSatk += aw.stats.satk;
+    if (aw.stats.sdef) f.baseSdef += aw.stats.sdef;
+    if (aw.stats.spd) f.baseSpd += aw.stats.spd;
+  }
+  if (aw.types) f.types = aw.types;
+  if (aw.ability) f.ability = aw.ability;
+  if (aw.moves) f.moves = aw.moves;
+}
+
 class Fighter {
   constructor(charDef, loadout) {
     this.def = charDef;
@@ -66,6 +86,9 @@ class Fighter {
     this.protectStreak = 0;   // consecutive Protects (diminishing success)
     this.usedRevive = false;
     this.usedSurvive = false;
+    this.awakened = false;    // has undergone its Awakening this battle
+    this.types = null;        // Awakening can override types…
+    this.ability = null;      // …and ability (both read via fTypes / fAbility)
   }
   get alive() { return this.hp > 0; }
   get name() { return this.def.name; }
@@ -84,8 +107,8 @@ class Battle {
     const pL = opts.playerLoadouts || [];
     const eL = opts.enemyLoadouts || [];
     this.sides = {
-      player: { crew: playerIds.map((id, i) => new Fighter(CHAR_BY_ID[id], pL[i])), active: 0, isAI: false },
-      enemy: { crew: enemyIds.map((id, i) => new Fighter(CHAR_BY_ID[id], eL[i])), active: 0, isAI: true },
+      player: { crew: playerIds.map((id, i) => new Fighter(CHAR_BY_ID[id], pL[i])), active: 0, awakened: false, isAI: false },
+      enemy: { crew: enemyIds.map((id, i) => new Fighter(CHAR_BY_ID[id], eL[i])), active: 0, awakened: false, isAI: true },
     };
     this.turn = 0;
     this.over = false;
@@ -108,9 +131,9 @@ class Battle {
     const f = this.active(sideKey);
     if (!f || !f.alive) return null;
     const opp = this.active(this.other(sideKey));
-    const oppAb = opp && opp.alive ? opp.def.ability : null;
-    if (oppAb && oppAb.kind === 'nullify' && f.def.ability.kind !== 'nullify') return null;
-    return f.def.ability;
+    const oppAb = opp && opp.alive ? fAbility(opp) : null;
+    if (oppAb && oppAb.kind === 'nullify' && fAbility(f).kind !== 'nullify') return null;
+    return fAbility(f);
   }
 
   /* Effective offense for a move's damage class: Attack (physical) or
@@ -154,6 +177,10 @@ class Battle {
     // 1. switches first
     if (playerAction.type === 'switch') this.doSwitch('player', playerAction.idx);
     if (enemyAction.type === 'switch') this.doSwitch('enemy', enemyAction.idx);
+
+    // 1b. Awakenings — applied before moves so the new stats/moveset act this turn
+    if (playerAction.awaken) this.applyAwaken('player');
+    if (enemyAction.awaken) this.applyAwaken('enemy');
 
     // 2. moves, ordered by priority then speed
     const movers = [];
@@ -234,6 +261,21 @@ class Battle {
         this.emit({ t: 'log', msg: `👁️ ${f.name}'s ${ab.name} washes over ${opp.name} — Attack fell!` });
       }
     }
+  }
+
+  canAwaken(sideKey) {
+    const f = this.active(sideKey);
+    return !!(f && f.alive && f.def.awaken && !f.awakened && !this.sides[sideKey].awakened);
+  }
+  applyAwaken(sideKey) {
+    if (!this.canAwaken(sideKey)) return false;
+    const f = this.active(sideKey), aw = f.def.awaken;
+    this.sides[sideKey].awakened = true;
+    f.awakened = true;
+    applyAwakenStats(f, aw);
+    this.emit({ t: 'awaken', side: sideKey, name: f.name, awakenName: aw.name });
+    this.emit({ t: 'log', msg: `⚡ ${f.name} AWAKENS — ${aw.name}!` });
+    return true;
   }
 
   changeStage(sideKey, stat, delta) {
@@ -382,7 +424,7 @@ class Battle {
       return;
     }
 
-    let eff = typeEffectiveness(mv.type, target.def.types);
+    let eff = typeEffectiveness(mv.type, fTypes(target));
     // Roger's supreme Haki: resistances don't apply (immunities still do)
     if (eff > 0 && eff < 1 && userAb && userAb.kind === 'pierce') {
       eff = 1;
@@ -413,7 +455,7 @@ class Battle {
 
       let dmg = ((2 * LEVEL / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
       // STAB
-      if (user.def.types.includes(mv.type)) dmg *= 1.5;
+      if (fTypes(user).includes(mv.type)) dmg *= 1.5;
       dmg *= eff;
       if (isCrit) dmg *= critMult;
       dmg *= 0.85 + rngFloat() * 0.15;
@@ -425,7 +467,7 @@ class Battle {
       if (targetAb && targetAb.kind === 'scales' && target.hp > target.maxHp / 2) dmg *= targetAb.mult;
       if (targetAb && targetAb.kind === 'transform' && target.hp <= target.maxHp / 2) dmg *= targetAb.in;
       // Blackbeard's curse: he takes extra damage (his own ability, never nullified)
-      if (target.def.ability.kind === 'nullify') dmg *= target.def.ability.dmgIn;
+      if (fAbility(target).kind === 'nullify') dmg *= fAbility(target).dmgIn;
 
       dmg = Math.max(1, Math.floor(dmg));
 
@@ -581,12 +623,12 @@ class Battle {
       const f = this.active(sideKey);
       if (f && f.hp <= 0 && !f._fainted) {
         // revive ability
-        if (f.def.ability.kind === 'revive' && !f.usedRevive && this.abilityOf(sideKey)) {
+        if (fAbility(f).kind === 'revive' && !f.usedRevive && this.abilityOf(sideKey)) {
           f.usedRevive = true;
-          f.hp = Math.floor(f.maxHp * f.def.ability.frac);
+          f.hp = Math.floor(f.maxHp * fAbility(f).frac);
           f.status = null; f.stunned = false;
           this.emit({ t: 'heal', side: sideKey, amount: f.hp, hp: f.hp });
-          this.emit({ t: 'log', msg: `🎻 ${f.name}'s soul returns to his bones — ${f.def.ability.name}!` });
+          this.emit({ t: 'log', msg: `🎻 ${f.name}'s soul returns to his bones — ${fAbility(f).name}!` });
           continue;
         }
         f._fainted = true;
@@ -649,7 +691,7 @@ class Battle {
   estDamage(att, def, mv, attAb, defAb) {
     if (!mv || mv.pow === 0 || !def) return 0;
     if (defAb && defAb.kind === 'immuneType' && defAb.type === mv.type) return 0;
-    let eff = typeEffectiveness(mv.type, def.def.types);
+    let eff = typeEffectiveness(mv.type, fTypes(def));
     if (eff > 0 && eff < 1 && attAb && attAb.kind === 'pierce') eff = 1;
     if (eff === 0) return 0;
     const sp = mv.cat === 'special';
@@ -661,7 +703,7 @@ class Battle {
     const baseD = sp ? def.baseSdef : def.baseDef;
     const D = (mv.fx && mv.fx.ignoreDef) ? baseD : baseD * defMult;
     let dmg = ((2 * LEVEL / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
-    if (att.def.types.includes(mv.type)) dmg *= 1.5;
+    if (fTypes(att).includes(mv.type)) dmg *= 1.5;
     dmg *= eff * 0.93;
     if (attAb && attAb.kind === 'typeBoost' && attAb.type === mv.type) dmg *= attAb.mult;
     if (attAb && attAb.kind === 'executioner' && def.hp <= def.maxHp / 2) dmg *= attAb.mult;
@@ -669,7 +711,7 @@ class Battle {
     if (defAb && defAb.kind === 'armorTypes' && defAb.types.includes(mv.type)) dmg *= defAb.mult;
     if (defAb && defAb.kind === 'scales' && def.hp > def.maxHp / 2) dmg *= defAb.mult;
     if (defAb && defAb.kind === 'transform' && def.hp <= def.maxHp / 2) dmg *= defAb.in;
-    if (def.def.ability.kind === 'nullify') dmg *= def.def.ability.dmgIn;
+    if (fAbility(def).kind === 'nullify') dmg *= fAbility(def).dmgIn;
     if (mv.fx && mv.fx.multi) dmg *= (mv.fx.multi[0] + mv.fx.multi[1]) / 2;
     return Math.max(1, Math.floor(dmg));
   }
@@ -683,7 +725,7 @@ class Battle {
 
   /* Resolve which abilities are live for a hypothetical pairing (nullify). */
   liveAbilities(a, b) {
-    let abA = a.def.ability, abB = b.def.ability;
+    let abA = fAbility(a), abB = fAbility(b);
     if (abA && abA.kind === 'nullify' && abB && abB.kind !== 'nullify') abB = null;
     if (abB && abB.kind === 'nullify' && abA && abA.kind !== 'nullify') abA = null;
     return [abA, abB];
@@ -845,8 +887,10 @@ class Battle {
     /* ---- jittered argmax with slight imperfection ---- */
     for (const o of options) o.score *= 0.93 + rngFloat() * 0.14;
     options.sort((a, b) => b.score - a.score);
-    if (options.length > 1 && rngFloat() < 0.1) return options[1].action;
-    return options[0].action;
+    const choice = (options.length > 1 && rngFloat() < 0.1) ? options[1].action : options[0].action;
+    // Awakening is a strict upgrade — fire it on a healthy fighter when it attacks
+    if (choice.type === 'move' && this.canAwaken(sideKey) && me.hp > me.maxHp * 0.5) choice.awaken = true;
+    return choice;
   }
 }
 
@@ -864,8 +908,8 @@ class DoublesBattle {
     const pL = opts.playerLoadouts || [], eL = opts.enemyLoadouts || [];
     const make = (id, lo) => new Fighter(CHAR_BY_ID[id], lo || doublesLoadout(CHAR_BY_ID[id]));
     this.sides = {
-      player: { crew: playerIds.map((id, i) => make(id, pL[i])), field: [], redirect: null, wideGuard: false, isAI: false },
-      enemy: { crew: enemyIds.map((id, i) => make(id, eL[i])), field: [], redirect: null, wideGuard: false, isAI: true },
+      player: { crew: playerIds.map((id, i) => make(id, pL[i])), field: [], redirect: null, wideGuard: false, awakened: false, isAI: false },
+      enemy: { crew: enemyIds.map((id, i) => make(id, eL[i])), field: [], redirect: null, wideGuard: false, awakened: false, isAI: true },
     };
     for (const sk of ['player', 'enemy']) {
       const s = this.sides[sk];
@@ -897,8 +941,8 @@ class DoublesBattle {
   abilityOf(sk, pos) {
     const f = this.fighterAt(sk, pos);
     if (!f || !f.alive) return null;
-    if (f.def.ability.kind !== 'nullify' && this.oppActives(sk).some(o => o.f.def.ability.kind === 'nullify')) return null;
-    return f.def.ability;
+    if (fAbility(f).kind !== 'nullify' && this.oppActives(sk).some(o => fAbility(o.f).kind === 'nullify')) return null;
+    return fAbility(f);
   }
 
   effOff(f, ab, cat) {
@@ -943,6 +987,21 @@ class DoublesBattle {
           this.emit({ t: 'log', msg: `👁️ ${f.name}'s ${ab.name} presses down on ${o.f.name} — Attack fell!` });
       }
     }
+  }
+
+  canAwaken(sk, pos) {
+    const f = this.fighterAt(sk, pos);
+    return !!(f && f.alive && f.def.awaken && !f.awakened && !this.sides[sk].awakened);
+  }
+  applyAwaken(sk, pos) {
+    if (!this.canAwaken(sk, pos)) return false;
+    const f = this.fighterAt(sk, pos), aw = f.def.awaken;
+    this.sides[sk].awakened = true;
+    f.awakened = true;
+    applyAwakenStats(f, aw);
+    this.emit({ t: 'awaken', side: sk, slot: pos, name: f.name, awakenName: aw.name });
+    this.emit({ t: 'log', msg: `⚡ ${f.name} AWAKENS — ${aw.name}!` });
+    return true;
   }
 
   /* voluntary switch: front-liner at pos swaps with a living bench mate */
@@ -1085,7 +1144,7 @@ class DoublesBattle {
       const neverMiss = (userAb && userAb.kind === 'neverMiss') || fx.neverMiss;
       if (!neverMiss && !chance(mv.acc)) { this.emit({ t: 'log', msg: `💨 ${user.name}'s attack missed ${tgt.name}!` }); continue; }
 
-      let eff = typeEffectiveness(mv.type, tgt.def.types);
+      let eff = typeEffectiveness(mv.type, fTypes(tgt));
       if (eff > 0 && eff < 1 && userAb && userAb.kind === 'pierce') { eff = 1; this.emit({ t: 'log', msg: `👑 ${user.name}'s supreme Haki cuts through the resistance!` }); }
       if (eff === 0) { this.emit({ t: 'log', msg: `🛡️ It doesn't affect ${tgt.name} at all!` }); continue; }
 
@@ -1102,7 +1161,7 @@ class DoublesBattle {
         const ignoreBuffs = (userAb && userAb.kind === 'ignoreBuffs');
         const D = fx.ignoreDef ? (mv.cat === 'special' ? tgt.baseSdef : tgt.baseDef) : this.effDef(tgt, mv.cat, ignoreBuffs);
         let dmg = ((2 * LEVEL / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
-        if (user.def.types.includes(mv.type)) dmg *= 1.5;
+        if (fTypes(user).includes(mv.type)) dmg *= 1.5;
         dmg *= eff;
         if (isCrit) dmg *= critMult;
         dmg *= 0.85 + rngFloat() * 0.15;
@@ -1113,7 +1172,7 @@ class DoublesBattle {
         if (tAb && tAb.kind === 'armorTypes' && tAb.types.includes(mv.type)) dmg *= tAb.mult;
         if (tAb && tAb.kind === 'scales' && tgt.hp > tgt.maxHp / 2) dmg *= tAb.mult;
         if (tAb && tAb.kind === 'transform' && tgt.hp <= tgt.maxHp / 2) dmg *= tAb.in;
-        if (tgt.def.ability.kind === 'nullify') dmg *= tgt.def.ability.dmgIn;
+        if (fAbility(tgt).kind === 'nullify') dmg *= fAbility(tgt).dmgIn;
         dmg = Math.max(1, Math.floor(dmg));
         const survAb = tAb && tAb.kind === 'survive';
         if (survAb && !tgt.usedSurvive && dmg >= tgt.hp) { dmg = tgt.hp - 1; tgt.usedSurvive = true; this.emit({ t: 'log', msg: `🌙 ${tgt.name} refuses to fall — ${tAb.name}!` }); }
@@ -1198,10 +1257,10 @@ class DoublesBattle {
     for (const sk of ['player', 'enemy']) for (let pos = 0; pos < DOUBLES_ACTIVE; pos++) {
       const f = this.fighterAt(sk, pos);
       if (!f || f.hp > 0 || f._fainted) continue;
-      if (f.def.ability.kind === 'revive' && !f.usedRevive && this.abilityOf(sk, pos)) {
-        f.usedRevive = true; f.hp = Math.floor(f.maxHp * f.def.ability.frac); f.status = null; f.stunned = false;
+      if (fAbility(f).kind === 'revive' && !f.usedRevive && this.abilityOf(sk, pos)) {
+        f.usedRevive = true; f.hp = Math.floor(f.maxHp * fAbility(f).frac); f.status = null; f.stunned = false;
         this.emit({ t: 'heal', side: sk, slot: pos, amount: f.hp, hp: f.hp });
-        this.emit({ t: 'log', msg: `🎻 ${f.name}'s soul returns to his bones — ${f.def.ability.name}!` });
+        this.emit({ t: 'log', msg: `🎻 ${f.name}'s soul returns to his bones — ${fAbility(f).name}!` });
         continue;
       }
       f._fainted = true; f.hp = 0; f.status = null;
@@ -1261,7 +1320,7 @@ class DoublesBattle {
   estDamage(att, def, mv, attAb, defAb) {
     if (!mv || mv.pow === 0 || !def) return 0;
     if (defAb && defAb.kind === 'immuneType' && defAb.type === mv.type) return 0;
-    let eff = typeEffectiveness(mv.type, def.def.types);
+    let eff = typeEffectiveness(mv.type, fTypes(def));
     if (eff > 0 && eff < 1 && attAb && attAb.kind === 'pierce') eff = 1;
     if (eff === 0) return 0;
     const sp = mv.cat === 'special';
@@ -1273,7 +1332,7 @@ class DoublesBattle {
     const baseD = sp ? def.baseSdef : def.baseDef;
     const D = (mv.fx && mv.fx.ignoreDef) ? baseD : baseD * defMult;
     let dmg = ((2 * LEVEL / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
-    if (att.def.types.includes(mv.type)) dmg *= 1.5;
+    if (fTypes(att).includes(mv.type)) dmg *= 1.5;
     dmg *= eff * 0.93;
     if (attAb && attAb.kind === 'typeBoost' && attAb.type === mv.type) dmg *= attAb.mult;
     if (attAb && attAb.kind === 'executioner' && def.hp <= def.maxHp / 2) dmg *= attAb.mult;
@@ -1281,7 +1340,7 @@ class DoublesBattle {
     if (defAb && defAb.kind === 'armorTypes' && defAb.types.includes(mv.type)) dmg *= defAb.mult;
     if (defAb && defAb.kind === 'scales' && def.hp > def.maxHp / 2) dmg *= defAb.mult;
     if (defAb && defAb.kind === 'transform' && def.hp <= def.maxHp / 2) dmg *= defAb.in;
-    if (def.def.ability.kind === 'nullify') dmg *= def.def.ability.dmgIn;
+    if (fAbility(def).kind === 'nullify') dmg *= fAbility(def).dmgIn;
     if (mv.fx && mv.fx.multi) dmg *= (mv.fx.multi[0] + mv.fx.multi[1]) / 2;
     return Math.max(1, Math.floor(dmg));
   }
@@ -1291,7 +1350,7 @@ class DoublesBattle {
     return p;
   }
   bestExpected(a, b) {
-    let abA = a.def.ability, abB = b.def.ability;
+    let abA = fAbility(a), abB = fAbility(b);
     if (abA && abA.kind === 'nullify' && abB && abB.kind !== 'nullify') abB = null;
     if (abB && abB.kind === 'nullify' && abA && abA.kind !== 'nullify') abA = null;
     let best = 0;
@@ -1360,7 +1419,9 @@ class DoublesBattle {
         consider(sc, i, tgt.pos);
       }
     }
-    return { type: 'move', idx: best.idx, target: best.target };
+    const choice = { type: 'move', idx: best.idx, target: best.target };
+    if (this.canAwaken(sk, pos) && me.hp > me.maxHp * 0.5) choice.awaken = true;
+    return choice;
   }
 
   /* playerActions: [{ pos, type:'move', idx, target:{side,pos} } | { pos, type:'switch', toCrewIdx }] */
@@ -1372,6 +1433,11 @@ class DoublesBattle {
 
     for (const a of (playerActions || [])) if (a.type === 'switch') this.doSwitch('player', a.pos, a.toCrewIdx);
 
+    // Awakenings (before moves so the new stats/moveset act this turn)
+    for (const a of (playerActions || [])) if (a.awaken) this.applyAwaken('player', a.pos);
+    const enemyActs = this.livingPositions('enemy').map(pos => ({ pos, act: this.chooseAI('enemy', pos) }));
+    for (const e of enemyActs) if (e.act.awaken) this.applyAwaken('enemy', e.pos);
+
     const movers = [];
     const enq = (sk, pos, act) => {
       const f = this.fighterAt(sk, pos);
@@ -1379,7 +1445,7 @@ class DoublesBattle {
       movers.push({ sk, pos, mv: f.moves[act.idx], tgt: act.target });
     };
     for (const a of (playerActions || [])) if (a.type === 'move') enq('player', a.pos, a);
-    for (const pos of this.livingPositions('enemy')) enq('enemy', pos, this.chooseAI('enemy', pos));
+    for (const e of enemyActs) enq('enemy', e.pos, e.act);
 
     movers.sort((a, b) => {
       const pa = this.movePriority(this.abilityOf(a.sk, a.pos), a.mv);
