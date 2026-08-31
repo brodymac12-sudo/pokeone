@@ -18,14 +18,40 @@
     <h1 class="game-logo">GRAND LINE<br>LEGENDS</h1>
     <p class="tagline">Assemble your pirate crew. Master 16 powers of the sea. Conquer the Grand Line.</p>
     <div class="title-actions">
-      <button id="btn-setsail" class="btn btn-gold btn-big">⚓ Set Sail</button>
+      <button id="btn-story" class="btn btn-gold btn-big">🗺️ Story Mode</button>
+      <button id="btn-setsail" class="btn btn-ghost btn-big">⚓ Free Battle</button>
       <button id="btn-doubles" class="btn btn-ghost btn-big">⚔️ 2v2 Doubles</button>
       <button id="btn-tournament" class="btn btn-ghost btn-big">🏆 Tournament</button>
       <button id="btn-library" class="btn btn-ghost btn-big">📖 Library</button>
       <button id="btn-typechart" class="btn btn-ghost btn-big">📜 Type Chart</button>
     </div>
-    <div class="title-foot">A fan-made tactical battler inspired by One Piece · 33 legends · 132 signature moves</div>
+    <div class="title-foot">A fan-made tactical battler inspired by One Piece · 14-island story campaign · 33 legends · 11 Awakenings</div>
     <div class="wave-band"></div>
+  </section>
+
+  <!-- ==================== STORY MAP ==================== -->
+  <section id="screen-story" class="screen">
+    <div class="select-header">
+      <h2>🗺️ Grand Line Voyage</h2>
+      <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">
+        <span id="story-berries" class="berry-tag">🪙 0</span>
+        <button id="btn-story-crew" class="btn">👥 Crew &amp; Training</button>
+        <button id="btn-story-reset" class="btn btn-danger">↺ New Voyage</button>
+        <button id="btn-story-back" class="btn">← Title</button>
+      </div>
+    </div>
+    <div id="story-map" class="story-map"></div>
+  </section>
+
+  <!-- ==================== STORY RESULT ==================== -->
+  <section id="screen-story-result" class="screen">
+    <h1 id="sr-title" class="result-title win">ISLAND CLEARED!</h1>
+    <p id="sr-sub" class="result-sub"></p>
+    <div id="sr-rewards" class="sr-rewards"></div>
+    <div class="result-actions">
+      <button id="btn-sr-continue" class="btn btn-gold btn-big">⚓ Onward</button>
+      <button id="btn-sr-retry" class="btn btn-big">🔁 Try Again</button>
+    </div>
   </section>
 
   <!-- ==================== CREW SELECT ==================== -->
@@ -236,6 +262,18 @@
     </div>
   </div>
 
+  <div id="modal-crew" class="modal-back">
+    <div class="modal" style="max-width:780px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h3>👥 Your Crew <span id="crew-berries" class="berry-tag"></span></h3>
+        <button id="btn-crew-close" class="btn">✕</button>
+      </div>
+      <p style="font-size:12px;color:#93a9c2;margin:6px 0 10px">Spend berries at the tavern to train a fighter one level. Recruits join at the strength of the island where you met them.</p>
+      <div id="crew-list" class="crew-list"></div>
+      <div class="modal-foot"><button id="btn-crew-close2" class="btn btn-gold">Back to the map</button></div>
+    </div>
+  </div>
+
   <div id="modal-typechart" class="modal-back">
     <div class="modal" style="max-width:760px">
       <div style="display:flex;justify-content:space-between;align-items:center">
@@ -260,6 +298,7 @@
 </div>
 
 <script src="js/data.js"></script>
+<script src="js/story.js"></script>
 <script src="js/sprites.js"></script>
 <script src="js/engine.js"></script>
 <script src="js/ui.js"></script>
