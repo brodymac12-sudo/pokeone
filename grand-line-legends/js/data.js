@@ -812,15 +812,21 @@ const RIVALRIES = [
 const CREW_SIZE = 4;
 const LEVEL = 50;
 
-/* Real stats at battle level */
-function realStats(base) {
+/* Real stats at a given battle level. Every stat scales proportionally, so
+   level 50 reproduces the original values exactly and lower-level fighters
+   are weaker across the board (used by Story Mode's progression). */
+function realStats(base, level) {
+  const L = level || LEVEL;
+  const k = L / LEVEL;                    // combat stats scale linearly with level
+  const kh = 0.35 + 0.65 * k;             // HP falls off more gently, so rookie
+  const s = v => Math.max(1, Math.floor(v * k));   // duels still last a few turns
   return {
-    hp: base.hp + 60 + 50,          // chunky HP pools
-    atk: base.atk + 5,
-    def: base.def + 5,
-    satk: base.satk + 5,
-    sdef: base.sdef + 5,
-    spd: base.spd + 5,
+    hp: Math.max(12, Math.floor((base.hp + 60 + 50) * kh)),   // chunky HP pools
+    atk: s(base.atk + 5),
+    def: s(base.def + 5),
+    satk: s(base.satk + 5),
+    sdef: s(base.sdef + 5),
+    spd: s(base.spd + 5),
   };
 }
 
