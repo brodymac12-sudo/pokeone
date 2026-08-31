@@ -5,7 +5,7 @@ const path = require('path');
 const vm = require('vm');
 
 const root = path.join(__dirname, '..');
-const code = ['js/data.js', 'js/engine.js', 'js/sprites.js']
+const code = ['js/data.js', 'js/story.js', 'js/engine.js', 'js/sprites.js']
   .map(f => fs.readFileSync(path.join(root, f), 'utf8'))
   .join('\n;\n');
 
@@ -424,6 +424,137 @@ console.log(`\ntournament: ${tState.pairs.length * tState.reps} duels in ${tMs}m
 if (tStats.upset) console.log(`  upset: ${tStats.upset.a} beat ${tStats.upset.b} ${tStats.upset.aWins}-${tStats.upset.bWins} (BST gap ${tStats.upset.gap})`);
 console.log(`  deadlock: ${tStats.deadlock.a} vs ${tStats.deadlock.b} ${tStats.deadlock.aWins}-${tStats.deadlock.bWins}`);
 console.log(`  marathon: ${tStats.marathon.a} vs ${tStats.marathon.b} avg ${tStats.marathon.avgTurns.toFixed(1)} turns`);
+
+/* ---- level scaling ---- */
+{
+  const base = sandbox.CHAR_BY_ID['luffy'].stats;
+  const at50 = sandbox.realStats(base, 50), plain = sandbox.realStats(base);
+  check(JSON.stringify(at50) === JSON.stringify(plain), 'realStats defaults to level 50');
+  check(at50.hp === base.hp + 110 && at50.atk === base.atk + 5, 'level 50 reproduces the original stat line');
+  const at20 = sandbox.realStats(base, 20);
+  check(at20.atk < at50.atk && at20.hp < at50.hp && at20.spd < at50.spd, 'lower level means lower stats');
+  const lowF = new sandbox.Fighter(sandbox.CHAR_BY_ID['luffy'], null, 12);
+  const hiF = new sandbox.Fighter(sandbox.CHAR_BY_ID['luffy'], null, 50);
+  check(lowF.level === 12 && hiF.level === 50, 'fighters carry their level');
+  // a level gap should decide fights
+  let lowWins = 0;
+  for (let i = 0; i < 60; i++) {
+    const b = new sandbox.Battle(['luffy'], ['luffy'], { playerLevels: 15, enemyLevels: 30 });
+    let g = 0; while (!b.over && g < 200) { g++; b.playTurn(b.chooseAI('player')); }
+    if (b.winner === 'player') lowWins++;
+  }
+  check(lowWins <= 12, `a 15-level deficit usually loses (won ${lowWins}/60)`);
+}
+
+/* ---- story data integrity ---- */
+{
+  const { STORY, STORY_START_CREW } = sandbox;
+  check(STORY.length >= 10, `campaign has chapters (got ${STORY.length})`);
+  const ids = new Set();
+  let prevLevel = 0;
+  const owned = new Set(STORY_START_CREW);
+  for (const ch of STORY) {
+    check(!ids.has(ch.id), `chapter id ${ch.id} unique`); ids.add(ch.id);
+    check(ch.name && ch.blurb && ch.flag && ch.sea, `${ch.id}: has presentation copy`);
+    check(ch.size >= 1 && ch.size <= sandbox.CREW_SIZE, `${ch.id}: legal party size`);
+    check(ch.mode === 'single' || ch.mode === 'doubles', `${ch.id}: valid mode`);
+    check(ch.foes.length >= 1 && ch.foes.every(f => sandbox.CHAR_BY_ID[f]), `${ch.id}: foes are real fighters`);
+    check((ch.unlock || []).every(u => sandbox.CHAR_BY_ID[u]), `${ch.id}: unlocks are real fighters`);
+    check(ch.berries > 0, `${ch.id}: pays berries`);
+    check(ch.level > prevLevel, `${ch.id}: difficulty rises (Lv ${ch.level} after ${prevLevel})`);
+    prevLevel = ch.level;
+    // you can always field a full party from what you own by now
+    check(owned.size >= ch.size, `${ch.id}: party of ${ch.size} is fieldable (own ${owned.size})`);
+    for (const u of (ch.unlock || [])) owned.add(u);
+  }
+  check(owned.size === CHARACTERS.length, `every fighter is recruitable (${owned.size}/${CHARACTERS.length})`);
+}
+
+/* ---- progression maths ---- */
+{
+  const st = sandbox.newStoryState();
+  check(st.roster.length === 1 && st.berries === 0, 'a new voyage starts with one fighter and no berries');
+  check(sandbox.isChapterUnlocked(st, 0) && !sandbox.isChapterUnlocked(st, 1), 'only the first island is open at the start');
+  const ch = sandbox.STORY[0];
+  const res = sandbox.resolveChapter(st, ch, true, ['luffy']);
+  check(res.won && res.first && res.berries === ch.berries, 'first clear pays full berries');
+  check(sandbox.levelOf(st, 'luffy') > sandbox.STORY_START_LEVEL, 'winning levels the party');
+  check(res.recruited.length > 0 && st.roster.length === 2, 'the island recruit joins the crew');
+  check(sandbox.isChapterUnlocked(st, 1), 'clearing an island opens the next');
+  const repeat = sandbox.resolveChapter(st, ch, true, ['luffy']);
+  check(repeat.berries < ch.berries && !repeat.first, 'replaying an island pays less');
+  // losing still pays a consolation share, so a stuck player can grind
+  check(sandbox.chapterXp(ch, false) > 0 && sandbox.chapterXp(ch, false) < sandbox.chapterXp(ch, true), 'a loss pays reduced XP');
+  // training spends berries for a level
+  const before = sandbox.levelOf(st, 'luffy');
+  st.berries = 100000;
+  check(sandbox.trainFighter(st, 'luffy').ok && sandbox.levelOf(st, 'luffy') === before + 1, 'training buys a level');
+  const broke = sandbox.newStoryState();
+  check(!sandbox.trainFighter(broke, 'luffy').ok, 'training needs berries');
+  // XP is capped at the level ceiling
+  sandbox.grantXp(st, 'luffy', 10 ** 7);
+  check(sandbox.levelOf(st, 'luffy') === sandbox.STORY_MAX_LEVEL, 'levels stop at the cap');
+}
+
+/* ---- the campaign is actually beatable ---- */
+{
+  const S = sandbox;
+  const bstOf = c => c.stats.hp + c.stats.atk + c.stats.def + c.stats.satk + c.stats.sdef + c.stats.spd;
+  // model a sensible player: strongest fighters, and an Awakening is worth
+  // far more than the raw stat line suggests
+  const power = id => bstOf(S.CHAR_BY_ID[id]) + (S.CHAR_BY_ID[id].awaken ? 90 : 0);
+  const pickParty = (st, size) => [...st.roster]
+    .sort((a, b) => (power(b) - power(a)) || (S.levelOf(st, b) - S.levelOf(st, a)))
+    .slice(0, size);
+  function fight(ch, party, st) {
+    const opts = { playerLevels: party.map(id => S.levelOf(st, id)), enemyLevels: ch.level };
+    if (ch.mode === 'doubles') {
+      const b = new S.DoublesBattle(party, ch.foes, opts); let g = 0;
+      while (!b.over && g < 400) {
+        g++;
+        if (b.awaiting) { for (const p of b.awaiting.positions.slice()) { if (!b.awaiting) break; const bn = b.benchIndices('player'); if (bn.length) b.submitReplace(p, bn[0]); } if (b.awaiting) break; continue; }
+        b.playRound(b.livingPositions('player').map(p => ({ pos: p, ...b.chooseAI('player', p) })));
+      }
+      return b.winner === 'player';
+    }
+    const b = new S.Battle(party, ch.foes, opts); let g = 0;
+    while (!b.over && g < 400) {
+      g++;
+      if (b.awaitingReplace) { b.submitReplace(b.sides.player.crew.findIndex(f => f.alive)); continue; }
+      b.playTurn(b.chooseAI('player'));
+    }
+    return b.winner === 'player';
+  }
+  let completed = 0, totalTries = 0;
+  const RUNS = 5, MAX_TRIES = 40;
+  for (let r = 0; r < RUNS; r++) {
+    const st = S.newStoryState();
+    let ok = true;
+    for (const ch of S.STORY) {
+      let tries = 0, won = false;
+      while (!won && tries < MAX_TRIES) {
+        tries++;
+        // spend berries at the tavern before a hard island, like a real player
+        const target = Math.min(S.STORY_MAX_LEVEL, ch.level + 4 + 3 * (tries - 1));
+        for (let guard = 0; guard < 200; guard++) {
+          const p = pickParty(st, ch.size);
+          const weakest = [...p].sort((a, b) => S.levelOf(st, a) - S.levelOf(st, b))[0];
+          if (S.levelOf(st, weakest) >= target) break;
+          if (!S.trainFighter(st, weakest).ok) break;
+        }
+        const party = pickParty(st, ch.size);
+        won = fight(ch, party, st);
+        S.resolveChapter(st, ch, won, party);
+      }
+      totalTries += tries;
+      if (!won) { ok = false; check(false, `campaign stalled at ${ch.name}`); break; }
+    }
+    if (ok) completed++;
+  }
+  console.log(`\nstory: ${completed}/${RUNS} campaigns completed, ${(totalTries / RUNS).toFixed(1)} avg attempts across ${sandbox.STORY.length} chapters`);
+  check(completed === RUNS, `every simulated campaign is winnable (${completed}/${RUNS})`);
+  check(totalTries / RUNS < 70, 'the difficulty curve does not demand excessive grinding');
+}
 
 console.log(failures === 0 ? '\nALL TESTS PASSED ✓' : `\n${failures} FAILURES ✗`);
 process.exit(failures === 0 ? 0 : 1);

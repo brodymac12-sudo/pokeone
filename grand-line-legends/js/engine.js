@@ -48,6 +48,12 @@ function doublesLoadout(charDef) {
 
 /* A fighter's live types / ability — an Awakening can override either, so
    read through these helpers everywhere instead of the shared char def. */
+/* Levels may be given per-fighter (array) or one value for the whole side. */
+function levelFor(spec, i) {
+  if (Array.isArray(spec)) return spec[i];
+  return typeof spec === 'number' ? spec : undefined;
+}
+
 function fTypes(f) { return f.types || f.def.types; }
 function fAbility(f) { return f.ability || f.def.ability; }
 
@@ -67,10 +73,11 @@ function applyAwakenStats(f, aw) {
 }
 
 class Fighter {
-  constructor(charDef, loadout) {
+  constructor(charDef, loadout, level) {
     this.def = charDef;
+    this.level = level || LEVEL;                     // Story Mode fighters level up
     this.moves = resolveLoadout(charDef, loadout);   // the 4 moves taken into battle
-    const rs = realStats(charDef.stats);
+    const rs = realStats(charDef.stats, this.level);
     this.maxHp = rs.hp;
     this.hp = rs.hp;
     this.baseAtk = rs.atk;
@@ -107,8 +114,8 @@ class Battle {
     const pL = opts.playerLoadouts || [];
     const eL = opts.enemyLoadouts || [];
     this.sides = {
-      player: { crew: playerIds.map((id, i) => new Fighter(CHAR_BY_ID[id], pL[i])), active: 0, awakened: false, isAI: false },
-      enemy: { crew: enemyIds.map((id, i) => new Fighter(CHAR_BY_ID[id], eL[i])), active: 0, awakened: false, isAI: true },
+      player: { crew: playerIds.map((id, i) => new Fighter(CHAR_BY_ID[id], pL[i], levelFor(opts.playerLevels, i))), active: 0, awakened: false, isAI: false },
+      enemy: { crew: enemyIds.map((id, i) => new Fighter(CHAR_BY_ID[id], eL[i], levelFor(opts.enemyLevels, i))), active: 0, awakened: false, isAI: true },
     };
     this.turn = 0;
     this.over = false;
@@ -453,7 +460,7 @@ class Battle {
       const ignoreBuffs = (userAb && userAb.kind === 'ignoreBuffs');
       const D = fx.ignoreDef ? (mv.cat === 'special' ? this.active(targetKey).baseSdef : this.active(targetKey).baseDef) : this.effDef(targetKey, mv.cat, ignoreBuffs);
 
-      let dmg = ((2 * LEVEL / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
+      let dmg = ((2 * (user.level || LEVEL) / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
       // STAB
       if (fTypes(user).includes(mv.type)) dmg *= 1.5;
       dmg *= eff;
@@ -702,7 +709,7 @@ class Battle {
     if (attAb && attAb.kind === 'ignoreBuffs' && defMult > 1) defMult = 1;
     const baseD = sp ? def.baseSdef : def.baseDef;
     const D = (mv.fx && mv.fx.ignoreDef) ? baseD : baseD * defMult;
-    let dmg = ((2 * LEVEL / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
+    let dmg = ((2 * (att.level || LEVEL) / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
     if (fTypes(att).includes(mv.type)) dmg *= 1.5;
     dmg *= eff * 0.93;
     if (attAb && attAb.kind === 'typeBoost' && attAb.type === mv.type) dmg *= attAb.mult;
@@ -906,10 +913,10 @@ const DOUBLES_ACTIVE = 2;
 class DoublesBattle {
   constructor(playerIds, enemyIds, opts = {}) {
     const pL = opts.playerLoadouts || [], eL = opts.enemyLoadouts || [];
-    const make = (id, lo) => new Fighter(CHAR_BY_ID[id], lo || doublesLoadout(CHAR_BY_ID[id]));
+    const make = (id, lo, lvl) => new Fighter(CHAR_BY_ID[id], lo || doublesLoadout(CHAR_BY_ID[id]), lvl);
     this.sides = {
-      player: { crew: playerIds.map((id, i) => make(id, pL[i])), field: [], redirect: null, wideGuard: false, awakened: false, isAI: false },
-      enemy: { crew: enemyIds.map((id, i) => make(id, eL[i])), field: [], redirect: null, wideGuard: false, awakened: false, isAI: true },
+      player: { crew: playerIds.map((id, i) => make(id, pL[i], levelFor(opts.playerLevels, i))), field: [], redirect: null, wideGuard: false, awakened: false, isAI: false },
+      enemy: { crew: enemyIds.map((id, i) => make(id, eL[i], levelFor(opts.enemyLevels, i))), field: [], redirect: null, wideGuard: false, awakened: false, isAI: true },
     };
     for (const sk of ['player', 'enemy']) {
       const s = this.sides[sk];
@@ -1160,7 +1167,7 @@ class DoublesBattle {
         const A = this.effOff(user, userAb, mv.cat);
         const ignoreBuffs = (userAb && userAb.kind === 'ignoreBuffs');
         const D = fx.ignoreDef ? (mv.cat === 'special' ? tgt.baseSdef : tgt.baseDef) : this.effDef(tgt, mv.cat, ignoreBuffs);
-        let dmg = ((2 * LEVEL / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
+        let dmg = ((2 * (user.level || LEVEL) / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
         if (fTypes(user).includes(mv.type)) dmg *= 1.5;
         dmg *= eff;
         if (isCrit) dmg *= critMult;
@@ -1331,7 +1338,7 @@ class DoublesBattle {
     if (attAb && attAb.kind === 'ignoreBuffs' && defMult > 1) defMult = 1;
     const baseD = sp ? def.baseSdef : def.baseDef;
     const D = (mv.fx && mv.fx.ignoreDef) ? baseD : baseD * defMult;
-    let dmg = ((2 * LEVEL / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
+    let dmg = ((2 * (att.level || LEVEL) / 5 + 2) * mv.pow * (A / D)) / 50 + 2;
     if (fTypes(att).includes(mv.type)) dmg *= 1.5;
     dmg *= eff * 0.93;
     if (attAb && attAb.kind === 'typeBoost' && attAb.type === mv.type) dmg *= attAb.mult;

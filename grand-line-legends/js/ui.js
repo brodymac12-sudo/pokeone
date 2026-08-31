@@ -10,14 +10,17 @@ const UI = {
   opponentChoice: 'random',
   selectedPreset: null,
   busy: false,
+  story: null,           // Story Mode save (roster, levels, berries)
+  storyChapter: null,    // chapter being prepared / fought
+  storyRun: null,        // set while a story battle is in progress
   awakenPending: false,  // player armed an Awakening for the next move
   muted: localStorage.getItem('gll-muted') === '1',
   lastCrews: null,       // for rematch
 };
 
 const MOVESET_SIZE = 4;
-/* Both modes draft a crew of 4; doubles just fields two at a time with a bench. */
-function crewMax() { return CREW_SIZE; }
+/* Free Battle always drafts 4; a Story chapter says how many you may bring. */
+function crewMax() { return UI.storyChapter ? UI.storyChapter.size : CREW_SIZE; }
 /* Default loadout: the 4 signature moves in single, or a doubles-ready set
    (signatures with the 2v2 move swapped in) in doubles — mirroring the AI. */
 function defaultLoadout(id) {
@@ -176,26 +179,7 @@ function buildSelectScreen() {
     grid.appendChild(card);
   }
 
-  // roster chips
-  const roster = $('#roster-grid');
-  roster.innerHTML = '';
-  for (const c of CHARACTERS) {
-    const chip = document.createElement('div');
-    chip.className = 'roster-chip';
-    chip.dataset.id = c.id;
-    chip.appendChild(makeSpriteCanvas(c.id, 4, false));
-    const nm = document.createElement('span');
-    nm.className = 'nm';
-    nm.textContent = c.name.split(' ').pop() === c.name ? c.name : c.name;
-    nm.textContent = shortName(c);
-    chip.appendChild(nm);
-    chip.addEventListener('click', () => {
-      SFX.click();
-      togglePick(c.id);     // update crew membership first…
-      showDetail(c.id);     // …so the detail panel shows the move picker
-    });
-    roster.appendChild(chip);
-  }
+  buildRosterGrid();
 
   // opponent select (random + presets + saved teams)
   const sel = $('#opponent-select');
@@ -206,6 +190,45 @@ function buildSelectScreen() {
   renderSavedTeams();
   showDetail(CHARACTERS[0].id);
   updateBattleButton();
+}
+
+/* The recruitable pool: everyone in Free Battle, only fighters you have
+   actually recruited while playing Story Mode. */
+function rosterPool() {
+  if (UI.storyChapter) {
+    const st = storyState();
+    return CHARACTERS.filter(c => st.roster.indexOf(c.id) >= 0);
+  }
+  return CHARACTERS;
+}
+
+function buildRosterGrid() {
+  const roster = $('#roster-grid');
+  if (!roster) return;
+  roster.innerHTML = '';
+  for (const c of rosterPool()) {
+    const chip = document.createElement('div');
+    chip.className = 'roster-chip';
+    chip.dataset.id = c.id;
+    chip.appendChild(makeSpriteCanvas(c.id, 4, false));
+    const nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = shortName(c);
+    chip.appendChild(nm);
+    if (UI.storyChapter) {
+      const lv = document.createElement('span');
+      lv.className = 'lib-bst';
+      lv.textContent = 'Lv ' + levelOf(storyState(), c.id);
+      chip.appendChild(lv);
+    }
+    chip.addEventListener('click', () => {
+      SFX.click();
+      togglePick(c.id);     // update crew membership first…
+      showDetail(c.id);     // …so the detail panel shows the move picker
+    });
+    roster.appendChild(chip);
+  }
+  renderRosterPicks();
 }
 
 function shortName(c) {
@@ -356,6 +379,8 @@ function updateBattleButton() {
   } else if (!movesReady) {
     const who = UI.playerCrew.find(id => ensureLoadout(id).length !== MOVESET_SIZE);
     btn.textContent = `Finish ${shortName(CHAR_BY_ID[who])}'s moveset (pick 4)`;
+  } else if (UI.storyChapter) {
+    btn.textContent = `⚓ Set sail for ${UI.storyChapter.name}!`;
   } else {
     btn.textContent = UI.mode === 'doubles' ? '⚔️ Begin 2v2 Duel!' : '⚔️ Set Sail for Battle!';
   }
@@ -466,9 +491,9 @@ function refreshOpponentOptions() {
 
 /* ============================ BATTLE SCREEN ============================ */
 
-function startBattle(playerIds, enemyIds, playerLoadouts, enemyLoadouts) {
-  UI.lastCrews = { player: [...playerIds], enemy: [...enemyIds], playerLoadouts, enemyLoadouts };
-  UI.battle = new Battle(playerIds, enemyIds, { playerLoadouts, enemyLoadouts });
+function startBattle(playerIds, enemyIds, playerLoadouts, enemyLoadouts, playerLevels, enemyLevels) {
+  UI.lastCrews = { player: [...playerIds], enemy: [...enemyIds], playerLoadouts, enemyLoadouts, playerLevels, enemyLevels };
+  UI.battle = new Battle(playerIds, enemyIds, { playerLoadouts, enemyLoadouts, playerLevels, enemyLevels });
   UI.busy = false;
   $('#battle-log').innerHTML = '';
   $('#turn-label').textContent = 'BATTLE START';
@@ -840,7 +865,11 @@ function buildTypeChart() {
 }
 
 /* ---- result ---- */
-function showResult(winner) { UI.busy = false; showResultGeneric(winner, UI.battle); }
+function showResult(winner) {
+  UI.busy = false;
+  if (UI.storyRun) return storyFinish(winner);
+  showResultGeneric(winner, UI.battle);
+}
 
 function showResultGeneric(winner, battle) {
   const t = $('#result-title');
@@ -1175,9 +1204,14 @@ function openTournament() {
 
 function openSelect(mode) {
   UI.mode = mode;
+  UI.storyChapter = null;  // leaving Story Mode: full roster, free opponent
+  UI.storyRun = null;
   UI.loadouts = {};        // re-default movesets for the chosen mode
   UI.playerCrew = [];
   UI.selectedPreset = null;
+  const saved = $('#saved-teams'); if (saved) saved.style.display = '';
+  storyToggleOpponentRow(true);
+  buildRosterGrid();
   const h2 = document.querySelector('#screen-select .select-header h2');
   if (h2) h2.textContent = mode === 'doubles' ? '⚔️ Assemble Your Crew — 2v2 (two fight at once)' : '⚓ Assemble Your Crew';
   const tabs = document.querySelector('#screen-select .tabs');
@@ -1200,10 +1234,10 @@ function openSelect(mode) {
 function dUnitEl(side, pos) { return document.querySelector(`#screen-doubles .d-unit[data-side="${side}"][data-slot="${pos}"]`); }
 function dFighterAt(side, pos) { return UI.dbl.battle.fighterAt(side, pos); }
 
-function startDoublesBattle(playerIds, enemyIds, playerLoadouts, enemyLoadouts) {
+function startDoublesBattle(playerIds, enemyIds, playerLoadouts, enemyLoadouts, playerLevels, enemyLevels) {
   UI.dbl = {
-    battle: new DoublesBattle(playerIds, enemyIds, { playerLoadouts, enemyLoadouts }),
-    lastCrews: { player: [...playerIds], enemy: [...enemyIds], playerLoadouts, enemyLoadouts },
+    battle: new DoublesBattle(playerIds, enemyIds, { playerLoadouts, enemyLoadouts, playerLevels, enemyLevels }),
+    lastCrews: { player: [...playerIds], enemy: [...enemyIds], playerLoadouts, enemyLoadouts, playerLevels, enemyLevels },
     busy: false, pending: [], queue: [], curSlot: null, pendingIdx: null,
   };
   $('#d-battle-log').innerHTML = '';
@@ -1507,7 +1541,203 @@ function dResolveRound() {
   dSetMovesEnabled(false);
   dPlayEvents(UI.dbl.battle.playRound(UI.dbl.pending));
 }
-function dShowResult(winner) { UI.dbl.busy = false; showResultGeneric(winner, UI.dbl.battle); }
+function dShowResult(winner) {
+  UI.dbl.busy = false;
+  if (UI.storyRun) return storyFinish(winner);
+  showResultGeneric(winner, UI.dbl.battle);
+}
+
+/* ============================ STORY MODE ============================ */
+
+function storyState() { if (!UI.story) UI.story = loadStory(); return UI.story; }
+function storySave() { saveStory(storyState()); }
+
+function openStory() {
+  storyState();
+  UI.storyChapter = null;
+  UI.storyRun = null;
+  renderStoryMap();
+  showScreen('#screen-story');
+}
+
+function renderStoryMap() {
+  const st = storyState();
+  $('#story-berries').textContent = '🪙 ' + st.berries.toLocaleString();
+  const map = $('#story-map');
+  map.innerHTML = '';
+  let sea = null;
+  STORY.forEach((ch, i) => {
+    if (ch.sea !== sea) {
+      sea = ch.sea;
+      const h = document.createElement('div');
+      h.className = 'sea-head';
+      h.textContent = '⚓ ' + sea;
+      map.appendChild(h);
+    }
+    const cleared = isChapterCleared(st, ch.id);
+    const unlocked = isChapterUnlocked(st, i);
+    const card = document.createElement('div');
+    card.className = 'chapter-card' + (cleared ? ' cleared' : '') + (unlocked ? '' : ' locked');
+    const status = cleared ? '✓ cleared' : unlocked ? '▶ next' : '🔒 locked';
+    card.innerHTML = `
+      <div class="ch-flag">${ch.flag}</div>
+      <div class="ch-body">
+        <div class="ch-top"><span class="ch-name">${i + 1}. ${ch.name}</span><span class="ch-status">${status}</span></div>
+        <div class="ch-blurb">${ch.blurb}</div>
+        <div class="ch-meta">Foes Lv ${ch.level} · bring ${ch.size} vs ${ch.foes.length}${ch.mode === 'doubles' ? ' · 2v2 doubles' : ''} · 🪙 ${ch.berries}</div>
+      </div>
+      <div class="ch-foes"></div>`;
+    const foesEl = card.querySelector('.ch-foes');
+    ch.foes.forEach(id => foesEl.appendChild(makeSpriteCanvas(id, 3, false)));
+    if (unlocked) card.addEventListener('click', () => { SFX.click(); openStoryChapter(i); });
+    map.appendChild(card);
+  });
+}
+
+/* Chapter briefing → the crew builder, restricted to your recruits. */
+function openStoryChapter(idx) {
+  const st = storyState();
+  const ch = STORY[idx];
+  UI.storyChapter = ch;
+  UI.mode = ch.mode === 'doubles' ? 'doubles' : 'single';
+  UI.loadouts = {};
+  UI.selectedPreset = null;
+  UI.playerCrew = (st.party || []).filter(id => st.roster.indexOf(id) >= 0).slice(0, ch.size);
+  UI.playerCrew.forEach(ensureLoadout);
+
+  const h2 = document.querySelector('#screen-select .select-header h2');
+  if (h2) h2.textContent = `${ch.flag} ${ch.name} — choose ${ch.size} ${ch.size === 1 ? 'fighter' : 'fighters'}`;
+  const tabs = document.querySelector('#screen-select .tabs');
+  if (tabs) tabs.style.display = 'none';
+  $('#preset-grid').style.display = 'none';
+  $('#custom-builder').style.display = 'grid';
+  const saved = $('#saved-teams'); if (saved) saved.style.display = 'none';
+  storyToggleOpponentRow(false);
+
+  buildRosterGrid();
+  renderCrewSlots();
+  showDetail(UI.playerCrew[0] || st.roster[0]);
+  updateBattleButton();
+  showScreen('#screen-select');
+}
+
+/* Story fights a fixed foe, so the opponent picker is hidden there. */
+function storyToggleOpponentRow(show) {
+  const sel = $('#opponent-select');
+  const label = document.querySelector('.vs-row label');
+  if (sel) sel.style.display = show ? '' : 'none';
+  if (label) label.style.display = show ? '' : 'none';
+}
+
+function startStoryBattle() {
+  const st = storyState(), ch = UI.storyChapter;
+  st.party = [...UI.playerCrew];
+  storySave();
+  const loadouts = UI.playerCrew.map(id => loadoutMoves(id));
+  const levels = UI.playerCrew.map(id => levelOf(st, id));
+  UI.storyRun = { chapterId: ch.id, party: [...UI.playerCrew] };
+  if (ch.mode === 'doubles') startDoublesBattle([...UI.playerCrew], [...ch.foes], loadouts, undefined, levels, ch.level);
+  else startBattle([...UI.playerCrew], [...ch.foes], loadouts, undefined, levels, ch.level);
+}
+
+/* Battle over: bank the XP, berries and recruits, then show the spoils. */
+function storyFinish(winner) {
+  const st = storyState(), run = UI.storyRun;
+  const ch = STORY_BY_ID[run.chapterId];
+  const res = resolveChapter(st, ch, winner === 'player', run.party);
+  storySave();
+  UI.storyRun = null;
+  renderStoryResult(ch, res);
+  showScreen('#screen-story-result');
+}
+
+function renderStoryResult(ch, res) {
+  const st = storyState();
+  const t = $('#sr-title');
+  t.textContent = res.won ? (res.first ? 'ISLAND CLEARED!' : 'VICTORY!') : 'DEFEATED...';
+  t.className = 'result-title ' + (res.won ? 'win' : 'lose');
+  $('#sr-sub').textContent = res.won
+    ? `${ch.flag} ${ch.name} is behind you. The log pose turns.`
+    : `${ch.name} was too much this time — train up and sail back in.`;
+
+  const box = $('#sr-rewards');
+  box.innerHTML = '';
+  const line = (label, value) => {
+    const d = document.createElement('div');
+    d.className = 'sr-line';
+    d.innerHTML = `<span class="sr-label">${label}</span><span class="sr-value">${value}</span>`;
+    box.appendChild(d);
+  };
+  line('⭐ XP earned', `+${res.xpEach} to each fighter`);
+  if (res.berries) line('🪙 Berries', `+${res.berries.toLocaleString()}  (total ${st.berries.toLocaleString()})`);
+
+  if (res.levelUps.length) {
+    const d = document.createElement('div');
+    d.className = 'sr-line';
+    d.innerHTML = `<span class="sr-label">📈 Level up</span><span class="sr-value">${res.levelUps.map(l => `${shortName(CHAR_BY_ID[l.id])} Lv ${l.from}→${l.to}`).join(' · ')}</span>`;
+    box.appendChild(d);
+  }
+  if (res.recruited.length) {
+    const d = document.createElement('div');
+    d.className = 'sr-recruits';
+    d.innerHTML = '<div class="sr-label">🤝 Joined your crew</div>';
+    const row = document.createElement('div');
+    row.className = 'sr-faces';
+    for (const id of res.recruited) {
+      const f = document.createElement('div');
+      f.className = 'rf';
+      f.appendChild(makeSpriteCanvas(id, 4, false));
+      const nm = document.createElement('span');
+      nm.textContent = `${shortName(CHAR_BY_ID[id])} Lv ${levelOf(st, id)}`;
+      f.appendChild(nm);
+      row.appendChild(f);
+    }
+    d.appendChild(row);
+    box.appendChild(d);
+  }
+  const done = STORY.every(c => isChapterCleared(st, c.id));
+  if (done) line('👑 Voyage complete', 'You are the Pirate King. Free Battle awaits.');
+  $('#btn-sr-retry').style.display = res.won ? 'none' : '';
+  (res.won ? SFX.win : SFX.lose)();
+}
+
+/* ---- crew & training ---- */
+function openCrewModal() { renderCrewList(); $('#modal-crew').classList.add('open'); }
+function closeCrewModal() { $('#modal-crew').classList.remove('open'); }
+function renderCrewList() {
+  const st = storyState();
+  $('#crew-berries').textContent = '🪙 ' + st.berries.toLocaleString();
+  const list = $('#crew-list');
+  list.innerHTML = '';
+  const ordered = [...st.roster].sort((a, b) => levelOf(st, b) - levelOf(st, a));
+  for (const id of ordered) {
+    const c = CHAR_BY_ID[id];
+    const lv = levelOf(st, id), xp = st.xp[id] || 0, need = xpToNext(lv);
+    const maxed = lv >= STORY_MAX_LEVEL;
+    const row = document.createElement('div');
+    row.className = 'crew-row';
+    row.appendChild(makeSpriteCanvas(id, 3, false));
+    const info = document.createElement('div');
+    info.className = 'crew-info';
+    info.innerHTML = `<div class="crew-name">${shortName(c)} <span class="crew-lv">Lv ${lv}</span></div>
+      <div class="xp-track"><div class="xp-fill" style="width:${maxed ? 100 : Math.min(100, xp / need * 100)}%"></div></div>
+      <div class="crew-sub">${maxed ? 'MAX LEVEL' : xp + ' / ' + need + ' XP'}</div>`;
+    row.appendChild(info);
+    const cost = trainCost(lv);
+    const btn = document.createElement('button');
+    btn.className = 'btn';
+    if (maxed) { btn.textContent = 'MAX'; btn.disabled = true; }
+    else {
+      btn.textContent = `Train 🪙${cost}`;
+      btn.disabled = st.berries < cost;
+      btn.addEventListener('click', () => {
+        if (trainFighter(st, id).ok) { SFX.heal(); storySave(); renderCrewList(); renderStoryMap(); }
+      });
+    }
+    row.appendChild(btn);
+    list.appendChild(row);
+  }
+}
 
 /* ============================ WIRING ============================ */
 
@@ -1547,9 +1777,29 @@ function initUI() {
     if (!UI.playerCrew.every(id => ensureLoadout(id).length === MOVESET_SIZE)) return;
     SFX.click();
     const loadouts = UI.playerCrew.map(id => loadoutMoves(id));
+    if (UI.storyChapter) return startStoryBattle();
     const opp = pickOpponent();
     if (UI.mode === 'doubles') startDoublesBattle([...UI.playerCrew], opp.ids, loadouts, opp.loadouts);
     else startBattle([...UI.playerCrew], opp.ids, loadouts, opp.loadouts);
+  });
+
+  // ---- story mode ----
+  $('#btn-story').addEventListener('click', () => { SFX.click(); openStory(); });
+  $('#btn-story-back').addEventListener('click', () => { SFX.click(); showScreen('#screen-title'); });
+  $('#btn-story-crew').addEventListener('click', () => { SFX.click(); openCrewModal(); });
+  $('#btn-crew-close').addEventListener('click', closeCrewModal);
+  $('#btn-crew-close2').addEventListener('click', closeCrewModal);
+  $('#btn-story-reset').addEventListener('click', () => {
+    if (!confirm('Scuttle this voyage and start a brand new one? All levels, berries and recruits are lost.')) return;
+    SFX.click();
+    UI.story = resetStory();
+    openStory();
+  });
+  $('#btn-sr-continue').addEventListener('click', () => { SFX.click(); openStory(); });
+  $('#btn-sr-retry').addEventListener('click', () => {
+    SFX.click();
+    const idx = storyIndexOf(UI.storyChapter ? UI.storyChapter.id : STORY[0].id);
+    openStoryChapter(idx >= 0 ? idx : 0);
   });
 
   $('#btn-save-team').addEventListener('click', () => { SFX.click(); saveCurrentTeam(); });

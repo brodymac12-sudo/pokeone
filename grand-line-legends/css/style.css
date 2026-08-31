@@ -371,6 +371,56 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 400; letter-spacing:
 .d-switch-btn .mv-meta { color: #9fb8d4; }
 .dbl-tag { color: var(--gold); font-weight: 800; font-size: 11px; }
 
+/* ==================== STORY MODE ==================== */
+.berry-tag {
+  background: rgba(232, 184, 74, 0.18); color: var(--gold); border: 1px solid var(--panel-edge);
+  border-radius: 999px; padding: 4px 12px; font-weight: 800; font-size: 13px; white-space: nowrap;
+}
+.story-map { display: flex; flex-direction: column; gap: 9px; width: 100%; max-width: 940px; margin: 0 auto; }
+.sea-head {
+  font-family: var(--font-display); font-size: 19px; color: var(--gold); letter-spacing: 2px;
+  margin: 14px 0 2px; border-bottom: 1px solid rgba(232, 184, 74, 0.25); padding-bottom: 5px;
+}
+.chapter-card {
+  display: flex; align-items: center; gap: 14px; padding: 11px 14px; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 13px;
+  transition: transform 0.12s, box-shadow 0.12s, border-color 0.12s;
+}
+.chapter-card:hover:not(.locked) { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4); border-color: var(--gold); }
+.chapter-card.locked { opacity: 0.42; cursor: not-allowed; filter: grayscale(0.7); }
+.chapter-card.cleared { border-color: rgba(74, 222, 128, 0.45); }
+.chapter-card .ch-flag { font-size: 30px; flex: none; width: 42px; text-align: center; }
+.chapter-card .ch-body { flex: 1; min-width: 0; }
+.chapter-card .ch-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.chapter-card .ch-name { font-weight: 700; color: var(--parchment); font-size: 15px; }
+.chapter-card .ch-status { font-size: 11.5px; color: #9fb8d4; }
+.chapter-card.cleared .ch-status { color: #4ade80; }
+.chapter-card .ch-blurb { font-size: 12px; color: #9fb8d4; margin: 3px 0 4px; line-height: 1.45; }
+.chapter-card .ch-meta { font-size: 11px; color: var(--gold-dim); }
+.chapter-card .ch-foes { display: flex; gap: 3px; flex: none; }
+.chapter-card .ch-foes canvas { image-rendering: pixelated; }
+@media (max-width: 700px) { .chapter-card .ch-foes { display: none; } }
+
+/* crew & training */
+.crew-list { display: flex; flex-direction: column; gap: 7px; max-height: 60vh; overflow-y: auto; }
+.crew-row { display: flex; align-items: center; gap: 11px; padding: 7px 10px; background: rgba(0, 0, 0, 0.24); border-radius: 10px; }
+.crew-row canvas { image-rendering: pixelated; flex: none; }
+.crew-info { flex: 1; min-width: 0; }
+.crew-name { font-size: 13.5px; color: var(--parchment); font-weight: 600; }
+.crew-lv { color: var(--gold); font-weight: 800; margin-left: 6px; }
+.crew-sub { font-size: 10.5px; color: #93a9c2; margin-top: 3px; }
+.xp-track { height: 7px; border-radius: 99px; background: rgba(0, 0, 0, 0.45); overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.1); margin-top: 4px; }
+.xp-fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, #6d8ef5, #5eead4); transition: width 0.4s ease; }
+
+/* story rewards */
+.sr-rewards { display: flex; flex-direction: column; gap: 9px; width: 100%; max-width: 520px; margin: 12px auto 4px; }
+.sr-line { display: flex; justify-content: space-between; gap: 12px; padding: 9px 13px; background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 11px; font-size: 13px; }
+.sr-label { color: #9fb8d4; }
+.sr-value { color: var(--parchment); font-weight: 700; text-align: right; }
+.sr-recruits { padding: 10px 13px; background: var(--panel); border: 1px solid rgba(240, 201, 58, 0.4); border-radius: 11px; }
+.sr-faces { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+.sr-faces .rf { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10.5px; color: var(--parchment); }
+
 /* ---- Awakening (Mega-style) ---- */
 .btn-awaken {
   background: linear-gradient(135deg, #b34bd6, #e85a8a 60%, #f0c93a);
