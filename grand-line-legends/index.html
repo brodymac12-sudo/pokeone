@@ -18,14 +18,90 @@
     <h1 class="game-logo">GRAND LINE<br>LEGENDS</h1>
     <p class="tagline">Assemble your pirate crew. Master 16 powers of the sea. Conquer the Grand Line.</p>
     <div class="title-actions">
-      <button id="btn-setsail" class="btn btn-gold btn-big">⚓ Set Sail</button>
+      <button id="btn-story" class="btn btn-gold btn-big">🗺️ Story Mode</button>
+      <button id="btn-world" class="btn btn-ghost btn-big">🧭 Uncharted Waters</button>
+      <button id="btn-setsail" class="btn btn-ghost btn-big">⚓ Free Battle</button>
+      <button id="btn-doubles" class="btn btn-ghost btn-big">⚔️ 2v2 Doubles</button>
       <button id="btn-tournament" class="btn btn-ghost btn-big">🏆 Tournament</button>
       <button id="btn-library" class="btn btn-ghost btn-big">📖 Library</button>
       <button id="btn-typechart" class="btn btn-ghost btn-big">📜 Type Chart</button>
     </div>
-    <div class="title-foot">A fan-made tactical battler inspired by One Piece · 33 legends · 132 signature moves</div>
+    <div class="title-foot">A fan-made tactical battler inspired by One Piece · 14-island story campaign · open-sea voyages · 33 legends · 11 Awakenings</div>
     <div class="wave-band"></div>
   </section>
+
+  <!-- ==================== STORY MAP ==================== -->
+  <section id="screen-story" class="screen">
+    <div class="select-header">
+      <h2>🗺️ Grand Line Voyage</h2>
+      <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">
+        <span id="story-berries" class="berry-tag">🪙 0</span>
+        <button id="btn-story-crew" class="btn">👥 Crew &amp; Training</button>
+        <button id="btn-story-reset" class="btn btn-danger">↺ New Voyage</button>
+        <button id="btn-story-back" class="btn">← Title</button>
+      </div>
+    </div>
+    <div id="story-map" class="story-map"></div>
+  </section>
+
+  <!-- ==================== STORY RESULT ==================== -->
+  <section id="screen-story-result" class="screen">
+    <h1 id="sr-title" class="result-title win">ISLAND CLEARED!</h1>
+    <p id="sr-sub" class="result-sub"></p>
+    <div id="sr-rewards" class="sr-rewards"></div>
+    <div class="result-actions">
+      <button id="btn-sr-continue" class="btn btn-gold btn-big">⚓ Onward</button>
+      <button id="btn-sr-retry" class="btn btn-big">🔁 Try Again</button>
+    </div>
+  </section>
+
+  <!-- ==================== UNCHARTED WATERS ==================== -->
+  <section id="screen-world" class="screen">
+    <div class="select-header">
+      <h2>🧭 Uncharted Waters</h2>
+      <div class="select-actions">
+        <span id="world-berries" class="berry-tag">🪙 0</span>
+        <button id="btn-world-crew" class="btn">👥 Crew &amp; Training</button>
+        <button id="btn-world-turnback" class="btn" style="display:none">⚓ Turn Back</button>
+        <button id="btn-world-back" class="btn">← Title</button>
+      </div>
+    </div>
+
+    <!-- shown between voyages: pick a sea -->
+    <div id="world-seas" class="world-seas"></div>
+
+    <!-- shown while a voyage is under way: the chart -->
+    <div id="world-run" style="display:none;width:100%">
+      <div id="world-chart" class="world-chart"></div>
+      <div id="world-status" class="world-status"></div>
+    </div>
+  </section>
+
+  <!-- ==================== VOYAGE LEDGER ==================== -->
+  <section id="screen-voyage-result" class="screen">
+    <h1 id="vr-title" class="result-title win">MADE PORT!</h1>
+    <p id="vr-sub" class="result-sub"></p>
+    <div id="vr-rewards" class="sr-rewards"></div>
+    <div class="result-actions">
+      <button id="btn-vr-again" class="btn btn-gold btn-big">🧭 Chart a New Course</button>
+      <button id="btn-vr-title" class="btn btn-big">🏠 Title</button>
+    </div>
+  </section>
+
+  <!-- ==================== ENCOUNTER ==================== -->
+  <div id="modal-encounter" class="modal-back">
+    <div class="modal modal-wide">
+      <div class="modal-head">
+        <h3 id="enc-title">Encounter</h3>
+        <span id="enc-threat" class="threat"></span>
+      </div>
+      <p id="enc-blurb" class="enc-blurb"></p>
+      <div id="enc-foes" class="enc-foes"></div>
+      <div id="enc-duelists" class="enc-duelists"></div>
+      <div id="enc-payout" class="enc-payout"></div>
+      <div class="modal-foot" id="enc-actions"></div>
+    </div>
+  </div>
 
   <!-- ==================== CREW SELECT ==================== -->
   <section id="screen-select" class="screen">
@@ -40,6 +116,12 @@
     <div class="tabs">
       <div class="tab active" data-tab="preset">Famous Crews</div>
       <div class="tab" data-tab="custom">Build Your Own</div>
+    </div>
+
+    <div id="saved-teams" class="saved-teams">
+      <button id="btn-save-team" class="btn" disabled>💾 Save Crew</button>
+      <span class="saved-label">Saved teams:</span>
+      <div id="saved-teams-list" class="saved-teams-list"></div>
     </div>
 
     <div id="preset-grid" class="preset-grid"></div>
@@ -91,8 +173,53 @@
       <div id="action-panel">
         <div id="moves-grid" class="moves-grid"></div>
         <div class="action-row">
+          <button id="btn-awaken" class="btn btn-awaken" style="display:none">⚡ Awaken</button>
           <button id="btn-switch" class="btn">🔄 Crew</button>
           <button id="btn-forfeit" class="btn btn-danger">🏳️ Forfeit</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== DOUBLES BATTLE (2v2) ==================== -->
+  <section id="screen-doubles" class="screen">
+    <div class="battle-header">
+      <div class="turn-label" id="d-turn-label">2v2 BATTLE</div>
+      <button id="d-btn-mute" class="btn" style="padding:5px 11px">🔊</button>
+    </div>
+
+    <div class="d-arena">
+      <div class="d-bench" data-side="enemy"></div>
+      <div class="d-row enemy">
+        <div class="d-unit" data-side="enemy" data-slot="0">
+          <div class="info-card d-card"></div>
+          <div class="combatant"><div class="sprite-wrap"></div></div>
+        </div>
+        <div class="d-unit" data-side="enemy" data-slot="1">
+          <div class="info-card d-card"></div>
+          <div class="combatant"><div class="sprite-wrap"></div></div>
+        </div>
+      </div>
+      <div class="d-row player">
+        <div class="d-unit" data-side="player" data-slot="0">
+          <div class="combatant"><div class="sprite-wrap"></div></div>
+          <div class="info-card d-card"></div>
+        </div>
+        <div class="d-unit" data-side="player" data-slot="1">
+          <div class="combatant"><div class="sprite-wrap"></div></div>
+          <div class="info-card d-card"></div>
+        </div>
+      </div>
+      <div class="d-bench" data-side="player"></div>
+    </div>
+
+    <div class="battle-bottom">
+      <div id="d-battle-log"></div>
+      <div id="d-action-panel">
+        <div id="d-prompt" class="d-prompt"></div>
+        <div id="d-moves-grid" class="moves-grid"></div>
+        <div class="action-row">
+          <button id="d-btn-forfeit" class="btn btn-danger">🏳️ Forfeit</button>
         </div>
       </div>
     </div>
@@ -184,6 +311,18 @@
     </div>
   </div>
 
+  <div id="modal-crew" class="modal-back">
+    <div class="modal" style="max-width:780px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h3>👥 Your Crew <span id="crew-berries" class="berry-tag"></span></h3>
+        <button id="btn-crew-close" class="btn">✕</button>
+      </div>
+      <p style="font-size:12px;color:#93a9c2;margin:6px 0 10px">Spend berries at the tavern to train a fighter one level. Recruits join at the strength of the island where you met them.</p>
+      <div id="crew-list" class="crew-list"></div>
+      <div class="modal-foot"><button id="btn-crew-close2" class="btn btn-gold">Back to the map</button></div>
+    </div>
+  </div>
+
   <div id="modal-typechart" class="modal-back">
     <div class="modal" style="max-width:760px">
       <div style="display:flex;justify-content:space-between;align-items:center">
@@ -208,6 +347,8 @@
 </div>
 
 <script src="js/data.js"></script>
+<script src="js/story.js"></script>
+<script src="js/world.js"></script>
 <script src="js/sprites.js"></script>
 <script src="js/engine.js"></script>
 <script src="js/ui.js"></script>

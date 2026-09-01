@@ -65,6 +65,17 @@ function typeEffectiveness(moveType, defenderTypes) {
   return mult;
 }
 
+/* Damage class by type: martial / armament arts strike the body (Physical,
+   uses Attack vs Defense); devil-fruit & elemental powers are Special (uses
+   Sp. Atk vs Sp. Def). A move may override with its own `cat`. */
+const TYPE_CATEGORY = {
+  SLASH: 'physical', STRIKE: 'physical', SHOT: 'physical', RUBBER: 'physical',
+  TREMOR: 'physical', BEAST: 'physical', HAKI: 'physical',
+  FLAME: 'special', ICE: 'special', LIGHTNING: 'special', LIGHT: 'special',
+  DARKNESS: 'special', POISON: 'special', SAND: 'special', SEA: 'special', SOUL: 'special',
+};
+function moveCategory(m) { return m.cat || TYPE_CATEGORY[m.type] || 'physical'; }
+
 /* ---- Move effect fields ----
    pow: 0 = status move. acc: percent. prio: move priority.
    fx: { burn/poison/para/freeze/sleep/stun: % chance on hit,
@@ -245,7 +256,7 @@ const CHARACTERS = [
       { name: 'Yasakani Sacred Jewel', type: 'LIGHT', pow: 42, acc: 90, fx: { multi: [2, 3] } },
       { name: 'Light Speed Kick', type: 'LIGHT', pow: 85, acc: 100, prio: 1 },
       { name: 'Ama no Murakumo', type: 'SLASH', pow: 90, acc: 100, fx: { critBoost: 25 } },
-      { name: 'Yata Mirror', type: 'LIGHT', pow: 0, acc: 100, fx: { self: { atk: 1, spd: 1 } } },
+      { name: 'Yata Mirror', type: 'LIGHT', pow: 0, acc: 100, fx: { self: { satk: 1, spd: 1 } } },
     ],
   },
   {
@@ -484,8 +495,294 @@ const CHARACTERS = [
   },
 ];
 
+/* ---- Expanded movepools ----
+   Each fighter's `moves` array begins with their 4 canonical signature
+   moves (the default loadout). Below we append two more thematic moves
+   plus a universal Protect, growing every pool to 7 so players can pick
+   any 4 in the crew builder. Battles default to the first 4, so the
+   power hierarchy and existing balance are unchanged unless the player
+   customizes a moveset. */
+const EXTRA_MOVES = {
+  luffy:      [{ name: 'Gum-Gum Gatling', type: 'RUBBER', pow: 38, acc: 100, fx: { multi: [2, 4] } }, { name: 'Gear Fourth: Kong Gun', type: 'HAKI', pow: 115, acc: 90, fx: { enemy: { def: -1 }, enemyChance: 20 } }],
+  zoro:       [{ name: 'Tatsumaki', type: 'SLASH', pow: 90, acc: 95, fx: { enemy: { spd: -1 }, enemyChance: 20 } }, { name: 'Black Rope Dragon Twister', type: 'SLASH', pow: 100, acc: 90, fx: { critBoost: 25 } }],
+  nami:       [{ name: 'Rain Tempo', type: 'SEA', pow: 0, acc: 100, fx: { self: { def: 1, spd: 1 } } }, { name: 'Thunder Lance Tempo', type: 'LIGHTNING', pow: 100, acc: 90, fx: { para: 20 } }],
+  usopp:      [{ name: 'Pop Green: Devil', type: 'BEAST', pow: 90, acc: 100, fx: { enemy: { def: -1 }, enemyChance: 30 } }, { name: 'Impact Wolf', type: 'STRIKE', pow: 80, acc: 100, fx: { stun: 20 } }],
+  sanji:      [{ name: 'Concasse', type: 'STRIKE', pow: 100, acc: 90, fx: { stun: 20 } }, { name: 'Ifrit Jambe', type: 'FLAME', pow: 120, acc: 85, fx: { burn: 30 } }],
+  chopper:    [{ name: 'Guard Point', type: 'BEAST', pow: 0, acc: 100, fx: { self: { def: 2 } } }, { name: 'Horn Point', type: 'BEAST', pow: 85, acc: 100, fx: { enemy: { def: -1 }, enemyChance: 20 } }],
+  robin:      [{ name: 'Cien Fleur: Wing', type: 'STRIKE', pow: 90, acc: 100, fx: { stun: 15 } }, { name: 'Spider Web', type: 'SOUL', pow: 0, acc: 100, fx: { enemy: { spd: -2 } } }],
+  franky:     [{ name: 'Coup de Vent', type: 'SHOT', pow: 110, acc: 85, fx: { enemy: { def: -1 }, enemyChance: 20 } }, { name: 'Franky Rocket', type: 'SHOT', pow: 80, acc: 100, fx: { stun: 20 } }],
+  brook:      [{ name: 'Gavotte Bond en Avant', type: 'SLASH', pow: 105, acc: 90, fx: { critBoost: 25 } }, { name: 'Swallow Bond à Terre', type: 'SLASH', pow: 90, acc: 95, fx: { enemy: { spd: -1 }, enemyChance: 20 } }],
+  jinbe:      [{ name: 'Karakusagawara Seiken', type: 'SEA', pow: 110, acc: 90, fx: { enemy: { def: -1 }, enemyChance: 20 } }, { name: 'Onigawara Seiken', type: 'STRIKE', pow: 95, acc: 100, fx: { stun: 20 } }],
+  garp:       [{ name: 'Iron Fist Meteor', type: 'STRIKE', pow: 110, acc: 90, fx: { stun: 20 } }, { name: 'Karma Cannon', type: 'HAKI', pow: 100, acc: 95, fx: { enemy: { def: -1 }, enemyChance: 20 } }],
+  akainu:     [{ name: 'Dai Funka', type: 'FLAME', pow: 120, acc: 85, fx: { burn: 30 } }, { name: 'Ryusei Kazan', type: 'FLAME', pow: 40, acc: 95, fx: { multi: [2, 3], burn: 10 } }],
+  aokiji:     [{ name: 'Ice Block: Partisan', type: 'ICE', pow: 95, acc: 100, fx: { freeze: 10 } }, { name: 'Frozen Lake', type: 'ICE', pow: 0, acc: 100, fx: { enemy: { spd: -2 } } }],
+  kizaru:     [{ name: 'Amaterasu', type: 'LIGHT', pow: 120, acc: 85, fx: { burn: 20 } }, { name: 'Eight-Span Crow Mirror', type: 'LIGHT', pow: 0, acc: 100, fx: { self: { spd: 2 } } }],
+  magellan:   [{ name: 'Venom Road', type: 'POISON', pow: 105, acc: 90, fx: { poison: 30 } }, { name: 'Doku Fugu', type: 'POISON', pow: 90, acc: 100, fx: { enemy: { spd: -1 }, enemyChance: 30 } }],
+  mihawk:     [{ name: 'Kokuto Yoru', type: 'SLASH', pow: 115, acc: 90, fx: { critBoost: 25 } }, { name: 'Crescent Moon Slash', type: 'SLASH', pow: 95, acc: 100, fx: { enemy: { spd: -1 }, enemyChance: 20 } }],
+  crocodile:  [{ name: 'Ground Death', type: 'SAND', pow: 110, acc: 90, fx: { enemy: { spd: -1 }, enemyChance: 30 } }, { name: 'Desert Encierro', type: 'SAND', pow: 0, acc: 100, fx: { enemy: { atk: -1, spd: -1 } } }],
+  doflamingo: [{ name: 'Off White Shield', type: 'SLASH', pow: 0, acc: 100, fx: { self: { def: 2 } } }, { name: 'Five-Color String', type: 'SLASH', pow: 100, acc: 90, fx: { enemy: { def: -1 }, enemyChance: 20 } }],
+  hancock:    [{ name: 'Snake Strike', type: 'SOUL', pow: 90, acc: 100, fx: { stun: 10 } }, { name: "Salome's Coil", type: 'HAKI', pow: 100, acc: 90, fx: { enemy: { def: -1 }, enemyChance: 20 } }],
+  law:        [{ name: 'Takt', type: 'SOUL', pow: 90, acc: 100, fx: { stun: 15 } }, { name: 'Amputate', type: 'SLASH', pow: 110, acc: 85, fx: { ignoreDef: true } }],
+  shanks:     [{ name: 'Sovereign Presence', type: 'HAKI', pow: 0, acc: 100, fx: { enemy: { atk: -2 } } }, { name: "Hawkeye's Rival", type: 'SLASH', pow: 100, acc: 90, fx: { critBoost: 25 } }],
+  whitebeard: [{ name: 'Tsunami', type: 'TREMOR', pow: 110, acc: 90, fx: { enemy: { spd: -1 }, enemyChance: 20 } }, { name: 'Trident Quake', type: 'TREMOR', pow: 95, acc: 100, fx: { stun: 20 } }],
+  ace:        [{ name: 'Entei', type: 'FLAME', pow: 110, acc: 90, fx: { burn: 30 } }, { name: 'Shinka: Shiranui', type: 'FLAME', pow: 40, acc: 95, fx: { multi: [2, 3], burn: 10 } }],
+  marco:      [{ name: 'Phoenix Talons', type: 'BEAST', pow: 95, acc: 95, fx: { critBoost: 25 } }, { name: 'Rebirth Embers', type: 'SOUL', pow: 0, acc: 100, fx: { self: { def: 1, spd: 1 } } }],
+  blackbeard: [{ name: 'Black Vortex', type: 'DARKNESS', pow: 100, acc: 90, fx: { drain: 30 } }, { name: 'Quake Cannon', type: 'TREMOR', pow: 120, acc: 85, fx: { stun: 20 } }],
+  kaido:      [{ name: 'Kaifu', type: 'HAKI', pow: 110, acc: 90, fx: { stun: 20 } }, { name: 'Blast Breath', type: 'FLAME', pow: 95, acc: 95, fx: { burn: 30 } }],
+  bigmom:     [{ name: 'Prometheus Blaze', type: 'FLAME', pow: 105, acc: 90, fx: { burn: 20 } }, { name: 'Ikoku Sovereignty', type: 'SOUL', pow: 110, acc: 85, fx: { drain: 30 } }],
+  enel:       [{ name: 'Mamaragan', type: 'LIGHTNING', pow: 120, acc: 85, fx: { para: 20 } }, { name: 'Vari', type: 'LIGHTNING', pow: 40, acc: 95, fx: { multi: [2, 3], para: 10 } }],
+  buggy:      [{ name: 'Chop-Chop Cannon', type: 'SHOT', pow: 95, acc: 90, fx: { burn: 20 } }, { name: 'Chop-Chop Festival', type: 'SLASH', pow: 40, acc: 90, fx: { multi: [2, 3] } }],
+  roger:      [{ name: 'Divine Edge', type: 'HAKI', pow: 110, acc: 90, fx: { stun: 20 } }, { name: "Oro Jackson's Wake", type: 'SLASH', pow: 100, acc: 90, fx: { critBoost: 25 } }],
+  rocks:      [{ name: "Tyrant's Grip", type: 'DARKNESS', pow: 100, acc: 90, fx: { drain: 30 } }, { name: 'Ambition of the Strongest', type: 'HAKI', pow: 120, acc: 85, fx: { enemy: { def: -1 }, enemyChance: 30 } }],
+  imu:        [{ name: 'Holy Light', type: 'LIGHT', pow: 110, acc: 90, fx: { burn: 20 } }, { name: "Throne's Decree", type: 'SOUL', pow: 95, acc: 100, fx: { enemy: { atk: -1 }, enemyChance: 30 } }],
+  loki:       [{ name: 'Dragon Maw', type: 'BEAST', pow: 110, acc: 90, fx: { stun: 20 } }, { name: 'Storm of Elbaph', type: 'LIGHTNING', pow: 95, acc: 95, fx: { para: 30 } }],
+};
+
+/* Universal tactical move available to every fighter. */
+const PROTECT_MOVE = { name: 'Protect', type: 'HAKI', pow: 0, acc: 100, prio: 4, fx: { protect: true } };
+
+/* ---- Doubles (2v2) moves ----
+   Tagged `doubles: true` and appended after Protect, so they sit late in the
+   pool: the default loadout (first 4 = signature moves) is unchanged, and the
+   single-battle/tournament balance is untouched. The crew builder only offers
+   these in 2v2 mode, and the doubles AI builds doubles-aware loadouts. They
+   define the 2v2 meta:
+     • spread  — strikes BOTH foes (0.75x with two targets)
+     • team    — rallies your whole side (speed/attack control)
+     • allyHeal/allyBuff — support your partner
+     • redirect — draw the foes' single-target attacks onto a tank */
+const DOUBLES_MOVES = {
+  // spread attackers
+  enel:       [{ name: 'Mamaragan Deluge', type: 'LIGHTNING', pow: 90, acc: 90, doubles: true, fx: { spread: true, para: 20 } }],
+  akainu:     [{ name: 'Meteor Volcano Rain', type: 'FLAME', pow: 90, acc: 90, doubles: true, fx: { spread: true, burn: 20 } }],
+  aokiji:     [{ name: 'Ice Age: Glacial Sweep', type: 'ICE', pow: 85, acc: 90, doubles: true, fx: { spread: true, freeze: 10 } }],
+  kizaru:     [{ name: 'Yasakani Barrage', type: 'LIGHT', pow: 90, acc: 90, doubles: true, fx: { spread: true } }],
+  whitebeard: [{ name: 'Seaquake Shockwave', type: 'TREMOR', pow: 95, acc: 90, doubles: true, fx: { spread: true, enemy: { def: -1 }, enemyChance: 20 } }],
+  bigmom:     [{ name: 'Indra Thunderclap', type: 'LIGHTNING', pow: 90, acc: 90, doubles: true, fx: { spread: true, para: 10 } }],
+  magellan:   [{ name: 'Venom Fog', type: 'POISON', pow: 70, acc: 95, doubles: true, fx: { spread: true, poison: 30 } }],
+  crocodile:  [{ name: 'Desert Storm', type: 'SAND', pow: 85, acc: 90, doubles: true, fx: { spread: true, enemy: { spd: -1 }, enemyChance: 20 } }],
+  kaido:      [{ name: 'Boro Breath: Sweep', type: 'FLAME', pow: 90, acc: 90, doubles: true, fx: { spread: true, burn: 20 } }],
+  buggy:      [{ name: 'Buggy Ball Barrage', type: 'SHOT', pow: 80, acc: 90, doubles: true, fx: { spread: true, burn: 10 } }],
+  imu:        [{ name: 'Mother Flame: Cataclysm', type: 'LIGHT', pow: 100, acc: 85, doubles: true, fx: { spread: true, burn: 20 } }],
+  doflamingo: [{ name: 'Birdcage', type: 'SLASH', pow: 80, acc: 95, doubles: true, fx: { spread: true, enemy: { spd: -1 }, enemyChance: 20 } }],
+  // team rally (speed / attack control)
+  nami:       [{ name: 'Tailwind Tempo', type: 'SEA', pow: 0, acc: 100, doubles: true, fx: { team: { spd: 2 } } }],
+  shanks:     [{ name: "Conqueror's Command", type: 'HAKI', pow: 0, acc: 100, doubles: true, fx: { team: { atk: 1 } } }],
+  // partner support
+  chopper:    [{ name: 'Cure-All Pulse', type: 'BEAST', pow: 0, acc: 100, doubles: true, fx: { allyHeal: 50 } }],
+  marco:      [{ name: 'Phoenix Grace', type: 'FLAME', pow: 0, acc: 100, doubles: true, fx: { allyHeal: 35, allyBuff: { def: 1 } } }],
+  law:        [{ name: 'Scan & Mend', type: 'SOUL', pow: 0, acc: 100, doubles: true, fx: { allyHeal: 30, allyBuff: { spd: 1 } } }],
+  robin:      [{ name: 'Mil Fleur: Shelter', type: 'SOUL', pow: 0, acc: 100, doubles: true, fx: { allyBuff: { def: 1, spd: 1 } } }],
+  // tanks that draw fire
+  jinbe:      [{ name: "Knight's Vanguard", type: 'SEA', pow: 0, acc: 100, prio: 3, doubles: true, fx: { redirect: true, self: { def: 1 } } }],
+  franky:     [{ name: 'Fortress Mode', type: 'STRIKE', pow: 0, acc: 100, prio: 3, doubles: true, fx: { redirect: true, self: { def: 1 } } }],
+};
+
+/* Field-control moves. Trick Room flips the turn order for a few turns
+   (a boon to slow heavyweights) and works in any mode. Wide Guard shields
+   the whole side from a spread attack for the turn — a 2v2-only tool. */
+const FIELD_MOVES = {
+  bigmom:     [{ name: 'Soul Reversal', type: 'SOUL', pow: 0, acc: 100, prio: -1, fx: { trickRoom: true } }],
+  magellan:   [{ name: 'Venom Dominion', type: 'POISON', pow: 0, acc: 100, prio: -1, fx: { trickRoom: true } }],
+  kaido:      [{ name: 'Beast King Roar', type: 'HAKI', pow: 0, acc: 100, prio: -1, fx: { trickRoom: true } }],
+  imu:        [{ name: 'Reverse the Throne', type: 'DARKNESS', pow: 0, acc: 100, prio: -1, fx: { trickRoom: true } }],
+  whitebeard: [{ name: 'Gura Bubble Wall', type: 'TREMOR', pow: 0, acc: 100, prio: -1, fx: { trickRoom: true } }],
+};
+const WIDE_GUARD = {
+  franky:     [{ name: 'Iron Wall', type: 'STRIKE', pow: 0, acc: 100, prio: 3, doubles: true, fx: { wideGuard: true } }],
+  whitebeard: [{ name: "Pops' Aegis", type: 'TREMOR', pow: 0, acc: 100, prio: 3, doubles: true, fx: { wideGuard: true } }],
+  hancock:    [{ name: 'Salome Shield', type: 'HAKI', pow: 0, acc: 100, prio: 3, doubles: true, fx: { wideGuard: true } }],
+  jinbe:      [{ name: 'Sea-Wall Stance', type: 'SEA', pow: 0, acc: 100, prio: 3, doubles: true, fx: { wideGuard: true } }],
+};
+
+for (const c of CHARACTERS) {
+  if (EXTRA_MOVES[c.id]) c.moves.push(...EXTRA_MOVES[c.id].map(m => ({ ...m })));
+  c.moves.push({ ...PROTECT_MOVE });
+  if (FIELD_MOVES[c.id]) c.moves.push(...FIELD_MOVES[c.id].map(m => ({ ...m })));
+  if (DOUBLES_MOVES[c.id]) c.moves.push(...DOUBLES_MOVES[c.id].map(m => ({ ...m })));
+  if (WIDE_GUARD[c.id]) c.moves.push(...WIDE_GUARD[c.id].map(m => ({ ...m })));
+}
+
+/* ---- Physical / Special stat split ----
+   Each fighter declares an offensive style and a defensive bias; we split
+   the base atk into Attack/Sp.Atk and base def into Defense/Sp.Def around
+   those leanings. The PRIMARY offense keeps the old Attack value (so a
+   fighter's main moves hit as hard as before) and average defense is
+   preserved — the split adds matchup depth without upending the hierarchy.
+   off: 'phys' | 'spec' | 'mixed' ; bulk: 'phys' | 'spec' | 'even'. */
+const STYLE = {
+  luffy: { off: 'phys', bulk: 'even' }, zoro: { off: 'phys', bulk: 'even' },
+  nami: { off: 'spec', bulk: 'even' }, usopp: { off: 'phys', bulk: 'even' },
+  sanji: { off: 'phys', bulk: 'even' }, chopper: { off: 'phys', bulk: 'phys' },
+  robin: { off: 'phys', bulk: 'even' }, franky: { off: 'phys', bulk: 'phys' },
+  brook: { off: 'spec', bulk: 'spec' }, jinbe: { off: 'spec', bulk: 'phys' },
+  garp: { off: 'phys', bulk: 'phys' }, akainu: { off: 'spec', bulk: 'phys' },
+  aokiji: { off: 'spec', bulk: 'even' }, kizaru: { off: 'spec', bulk: 'spec' },
+  magellan: { off: 'spec', bulk: 'phys' }, mihawk: { off: 'phys', bulk: 'even' },
+  crocodile: { off: 'spec', bulk: 'even' }, doflamingo: { off: 'phys', bulk: 'even' },
+  hancock: { off: 'spec', bulk: 'spec' }, law: { off: 'spec', bulk: 'even' },
+  shanks: { off: 'phys', bulk: 'even' }, whitebeard: { off: 'phys', bulk: 'phys' },
+  ace: { off: 'spec', bulk: 'even' }, marco: { off: 'spec', bulk: 'spec' },
+  blackbeard: { off: 'spec', bulk: 'even' }, kaido: { off: 'phys', bulk: 'phys' },
+  bigmom: { off: 'spec', bulk: 'even' }, enel: { off: 'spec', bulk: 'spec' },
+  buggy: { off: 'phys', bulk: 'even' }, roger: { off: 'phys', bulk: 'even' },
+  rocks: { off: 'spec', bulk: 'even' }, imu: { off: 'spec', bulk: 'spec' },
+  loki: { off: 'spec', bulk: 'phys' },
+};
+function deriveStats(c) {
+  const s = c.stats, st = STYLE[c.id] || { off: 'mixed', bulk: 'even' };
+  const r = v => Math.round(v);
+  let atk, satk;
+  if (st.off === 'phys') { atk = s.atk; satk = r(s.atk * 0.6); }
+  else if (st.off === 'spec') { satk = s.atk; atk = r(s.atk * 0.6); }
+  else { atk = r(s.atk * 0.92); satk = r(s.atk * 0.92); }
+  let def, sdef;
+  if (st.bulk === 'phys') { def = r(s.def * 1.12); sdef = r(s.def * 0.88); }
+  else if (st.bulk === 'spec') { sdef = r(s.def * 1.12); def = r(s.def * 0.88); }
+  else { def = s.def; sdef = s.def; }
+  c.stats = { hp: s.hp, atk, def, satk, sdef, spd: s.spd };
+}
+for (const c of CHARACTERS) deriveStats(c);
+
+/* tag every move with its damage class */
+for (const c of CHARACTERS) for (const m of c.moves) m.cat = moveCategory(m);
+
+/* ============================================================
+   AWAKENINGS — One Piece's answer to Mega Evolution.
+   Once per battle a side may awaken ONE of these fighters: it gains
+   stat boosts, may change typing, swaps to a stronger awakened ability,
+   and unlocks a brand-new moveset. The transformation lasts the battle.
+   `stats` values are flat boosts added to the fighter's battle stats. */
+const AWAKENINGS = {
+  luffy: {
+    name: 'Gear 5 · Sun God Nika', types: ['RUBBER', 'HAKI'],
+    stats: { atk: 32, spd: 30, def: 14, sdef: 10 },
+    ability: { name: 'Liberation', kind: 'dodge', chance: 25, desc: 'Cartoon freedom — 25% chance to dodge any attack.' },
+    moves: [
+      { name: 'Gum-Gum Dawn Whip', type: 'RUBBER', pow: 100, acc: 100, fx: { enemy: { def: -1 }, enemyChance: 30 } },
+      { name: 'Gum-Gum Giant', type: 'RUBBER', pow: 120, acc: 95, fx: { stun: 20 } },
+      { name: 'Bajrang Gun', type: 'HAKI', pow: 145, acc: 90, fx: { recoil: 15 } },
+      { name: 'Gum-Gum Lightning', type: 'HAKI', pow: 95, acc: 100, fx: { stun: 30 } },
+    ],
+  },
+  zoro: {
+    name: 'King of Hell · Asura', types: ['SLASH', 'SOUL'],
+    stats: { atk: 32, spd: 16, satk: 10, sdef: 8 },
+    ability: { name: 'Demon Asura', kind: 'superCrit', bonus: 25, mult: 2.5, desc: 'Nine-sword demon — +25% crit chance, crits deal 2.5×.' },
+    moves: [
+      { name: 'Asura: Makyusen', type: 'SLASH', pow: 130, acc: 90, fx: { critBoost: 25 } },
+      { name: 'King of Hell: Three Worlds', type: 'HAKI', pow: 120, acc: 90, fx: { stun: 20 } },
+      { name: 'Black Rope: Dragon Twister', type: 'SLASH', pow: 110, acc: 90, fx: { enemy: { def: -1 }, enemyChance: 30 } },
+      { name: 'Death Lion Song', type: 'SOUL', pow: 95, acc: 100, fx: { critBoost: 25 } },
+    ],
+  },
+  sanji: {
+    name: 'Ifrit Jambe · Exoskeleton', types: ['STRIKE', 'FLAME'],
+    stats: { atk: 26, spd: 26, def: 12, satk: 12 },
+    ability: { name: 'Exoskeleton', kind: 'typeBoost', type: 'FLAME', mult: 1.5, burnImmune: true, desc: 'Blue-flame Ifrit — Flame moves +50%, immune to burn.' },
+    moves: [
+      { name: 'Ifrit Jambe: Premier Hachis', type: 'FLAME', pow: 115, acc: 100, fx: { burn: 30 } },
+      { name: 'Diable: Concasse', type: 'STRIKE', pow: 115, acc: 95, fx: { stun: 20 } },
+      { name: 'Hell Memories', type: 'FLAME', pow: 130, acc: 90, fx: { burn: 30 } },
+      { name: 'Sky Walk', type: 'STRIKE', pow: 0, acc: 100, fx: { self: { spd: 2 } } },
+    ],
+  },
+  law: {
+    name: 'Awakening · Puncture Wille', types: ['SLASH', 'SOUL'],
+    stats: { satk: 32, spd: 22, def: 12, sdef: 10 },
+    ability: { name: 'K-Room', kind: 'ignoreBuffs', desc: 'Awakened ROOM — attacks ignore the foe\'s defensive boosts.' },
+    moves: [
+      { name: 'Puncture Wille', type: 'SOUL', pow: 130, acc: 90, fx: { ignoreDef: true } },
+      { name: 'Countershock', type: 'LIGHTNING', pow: 100, acc: 100, fx: { para: 30 } },
+      { name: 'Gamma Knife', type: 'SOUL', pow: 115, acc: 90, fx: { ignoreDef: true } },
+      { name: 'Silent Shock', type: 'SLASH', pow: 95, acc: 100, fx: { stun: 20 } },
+    ],
+  },
+  doflamingo: {
+    name: 'Awakening · String City', types: ['SLASH', 'SOUL'],
+    stats: { atk: 26, spd: 22, def: 16, sdef: 10 },
+    ability: { name: 'String City', kind: 'bonusStun', chance: 30, desc: 'Awakened strings — 30% chance to puppet-stun on every hit.' },
+    moves: [
+      { name: 'God Thread: Awakened', type: 'SLASH', pow: 120, acc: 90, fx: { critBoost: 25 } },
+      { name: 'White Snake', type: 'SLASH', pow: 105, acc: 95, fx: { enemy: { def: -1 }, enemyChance: 30 } },
+      { name: 'Spider Web', type: 'SOUL', pow: 95, acc: 100, fx: { stun: 20 } },
+      { name: 'Off-White Bulwark', type: 'SLASH', pow: 0, acc: 100, fx: { self: { def: 2 } } },
+    ],
+  },
+  kaido: {
+    name: 'Hybrid · Azure Dragon', types: ['BEAST', 'TREMOR'],
+    stats: { atk: 30, def: 16, sdef: 12, satk: 10 },
+    ability: { name: 'Sky Dragon Hide', kind: 'scales', mult: 0.6, desc: 'Indestructible dragon — takes 40% less damage above half HP.' },
+    moves: [
+      { name: 'Dragon Twister: Tempest', type: 'BEAST', pow: 115, acc: 95, fx: { enemy: { spd: -1 }, enemyChance: 30 } },
+      { name: 'Boro Breath', type: 'FLAME', pow: 110, acc: 90, fx: { burn: 30 } },
+      { name: 'Raimei Hakke', type: 'STRIKE', pow: 105, acc: 95, fx: { stun: 30 } },
+      { name: 'Conqueror Kaifu', type: 'HAKI', pow: 125, acc: 90, fx: { enemy: { def: -1 }, enemyChance: 30 } },
+    ],
+  },
+  crocodile: {
+    name: 'Awakening · Desert Empire', types: ['SAND', 'TREMOR'],
+    stats: { satk: 30, def: 16, spd: 14, sdef: 10 },
+    ability: { name: 'Desert Empire', kind: 'lifesteal', frac: 0.4, desc: 'Awakened drought — heals 40% of all damage dealt.' },
+    moves: [
+      { name: 'Ground Death', type: 'SAND', pow: 115, acc: 95, fx: { enemy: { spd: -1 }, enemyChance: 30 } },
+      { name: 'Desert Spada: Pesado', type: 'TREMOR', pow: 130, acc: 90, fx: { stun: 20 } },
+      { name: 'Sables: Requiem', type: 'SAND', pow: 100, acc: 95, fx: { enemy: { def: -1 }, enemyChance: 30 } },
+      { name: 'Barjan', type: 'SAND', pow: 95, acc: 100, fx: { poison: 30 } },
+    ],
+  },
+  shanks: {
+    name: 'Supreme King · Conqueror Advent', types: ['SLASH', 'HAKI'],
+    stats: { atk: 30, spd: 22, def: 14, sdef: 8 },
+    ability: { name: 'Supreme Conqueror', kind: 'superCrit', bonus: 20, mult: 2.5, desc: 'Haki-charged blade — +20% crit chance, crits deal 2.5×.' },
+    moves: [
+      { name: 'Divine Departure', type: 'HAKI', pow: 130, acc: 90, fx: { stun: 20 } },
+      { name: 'Gryphon Supreme Slash', type: 'SLASH', pow: 120, acc: 90, fx: { critBoost: 25 } },
+      { name: 'Conqueror Advent', type: 'HAKI', pow: 100, acc: 95, fx: { enemy: { atk: -1, def: -1 }, enemyChance: 50 } },
+      { name: 'Red Force', type: 'SLASH', pow: 110, acc: 95, fx: { critBoost: 25 } },
+    ],
+  },
+  roger: {
+    name: 'Pirate King · Final Will', types: ['SLASH', 'HAKI'],
+    stats: { atk: 30, spd: 22, def: 14, sdef: 10 },
+    // keeps his signature Pirate King's Haki (pierce) — no ability override
+    moves: [
+      { name: 'Divine Two-Sword Slash', type: 'SLASH', pow: 125, acc: 90, fx: { critBoost: 25 } },
+      { name: 'Kamusari: Supreme', type: 'HAKI', pow: 135, acc: 90, fx: { enemy: { def: -1 }, enemyChance: 40 } },
+      { name: 'Clash of Kings', type: 'HAKI', pow: 105, acc: 95, fx: { stun: 30 } },
+      { name: 'Inherited Will', type: 'SLASH', pow: 110, acc: 95, fx: { critBoost: 25 } },
+    ],
+  },
+  rocks: {
+    name: 'God Valley Demon · Domi Reversi', types: ['DARKNESS', 'HAKI'],
+    stats: { satk: 30, atk: 14, spd: 18, def: 12 },
+    ability: { name: 'Demon Sovereign', kind: 'lifesteal', frac: 0.3, desc: 'Devours the fallen — heals 30% of all damage dealt.' },
+    moves: [
+      { name: 'God Valley Cataclysm', type: 'HAKI', pow: 135, acc: 85, fx: { recoil: 12 } },
+      { name: "Demon's Rampage", type: 'DARKNESS', pow: 120, acc: 90, fx: { enemy: { def: -1 }, enemyChance: 30 } },
+      { name: "Davy's Grudge", type: 'DARKNESS', pow: 105, acc: 95, fx: { drain: 40 } },
+      { name: 'Tyrant Ambition', type: 'HAKI', pow: 100, acc: 100, fx: { stun: 20 } },
+    ],
+  },
+  imu: {
+    name: 'Ruler of the Void · True Form', types: ['DARKNESS', 'LIGHT'],
+    stats: { satk: 30, sdef: 16, def: 12, spd: 14 },
+    ability: { name: 'Eternal Throne', kind: 'immortal', frac: 0.15, desc: 'Immortal sovereign — regenerates 15% HP each turn; immune to burn & poison.' },
+    moves: [
+      { name: 'Mother Flame: Apocalypse', type: 'LIGHT', pow: 130, acc: 90, fx: { burn: 20 } },
+      { name: 'Spider of the Void', type: 'DARKNESS', pow: 110, acc: 95, fx: { stun: 20 } },
+      { name: 'Holy Decree', type: 'SOUL', pow: 100, acc: 95, fx: { enemy: { atk: -1 }, enemyChance: 50 } },
+      { name: 'Void Devourer', type: 'DARKNESS', pow: 105, acc: 95, fx: { drain: 30 } },
+    ],
+  },
+};
 const CHAR_BY_ID = {};
 for (const c of CHARACTERS) CHAR_BY_ID[c.id] = c;
+for (const id in AWAKENINGS) {
+  const aw = AWAKENINGS[id];
+  if (aw.moves) for (const m of aw.moves) m.cat = moveCategory(m);
+  if (CHAR_BY_ID[id]) CHAR_BY_ID[id].awaken = aw;
+}
 
 /* Preset pirate crews (teams of 4) */
 const PRESET_CREWS = [
@@ -515,16 +812,24 @@ const RIVALRIES = [
 const CREW_SIZE = 4;
 const LEVEL = 50;
 
-/* Real stats at battle level */
-function realStats(base) {
+/* Real stats at a given battle level. Every stat scales proportionally, so
+   level 50 reproduces the original values exactly and lower-level fighters
+   are weaker across the board (used by Story Mode's progression). */
+function realStats(base, level) {
+  const L = level || LEVEL;
+  const k = L / LEVEL;                    // combat stats scale linearly with level
+  const kh = 0.35 + 0.65 * k;             // HP falls off more gently, so rookie
+  const s = v => Math.max(1, Math.floor(v * k));   // duels still last a few turns
   return {
-    hp: base.hp + 60 + 50,          // chunky HP pools
-    atk: base.atk + 5,
-    def: base.def + 5,
-    spd: base.spd + 5,
+    hp: Math.max(12, Math.floor((base.hp + 60 + 50) * kh)),   // chunky HP pools
+    atk: s(base.atk + 5),
+    def: s(base.def + 5),
+    satk: s(base.satk + 5),
+    sdef: s(base.sdef + 5),
+    spd: s(base.spd + 5),
   };
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { TYPES, TYPE_CHART, typeEffectiveness, CHARACTERS, CHAR_BY_ID, PRESET_CREWS, RIVALRIES, CREW_SIZE, LEVEL, realStats };
+  module.exports = { TYPES, TYPE_CHART, TYPE_CATEGORY, moveCategory, typeEffectiveness, CHARACTERS, CHAR_BY_ID, PRESET_CREWS, RIVALRIES, CREW_SIZE, LEVEL, realStats };
 }
