@@ -214,6 +214,7 @@ if (typeof module !== 'undefined') {
   module.exports.isChapterCleared = isChapterCleared;
   module.exports.nextChapterIndex = nextChapterIndex;
   module.exports.resolveChapter = resolveChapter;
+  module.exports.recruit = recruit;
   module.exports.trainFighter = trainFighter;
   module.exports.trainCost = trainCost;
   module.exports.xpToNext = xpToNext;

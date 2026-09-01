@@ -20,7 +20,11 @@ const UI = {
 
 const MOVESET_SIZE = 4;
 /* Free Battle always drafts 4; a Story chapter says how many you may bring. */
-function crewMax() { return UI.storyChapter ? UI.storyChapter.size : CREW_SIZE; }
+function crewMax() {
+  if (UI.storyChapter) return UI.storyChapter.size;
+  if (UI.voyageOutfit) return VOYAGE_PARTY_MAX;   // a landing party is "up to", not "exactly"
+  return CREW_SIZE;
+}
 /* Default loadout: the 4 signature moves in single, or a doubles-ready set
    (signatures with the 2v2 move swapped in) in doubles — mirroring the AI. */
 function defaultLoadout(id) {
@@ -195,7 +199,7 @@ function buildSelectScreen() {
 /* The recruitable pool: everyone in Free Battle, only fighters you have
    actually recruited while playing Story Mode. */
 function rosterPool() {
-  if (UI.storyChapter) {
+  if (UI.storyChapter || UI.voyageOutfit) {
     const st = storyState();
     return CHARACTERS.filter(c => st.roster.indexOf(c.id) >= 0);
   }
@@ -370,15 +374,18 @@ function updateBattleButton() {
   const saveBtn = $('#btn-save-team');
   if (saveBtn) saveBtn.disabled = UI.playerCrew.length === 0;
   const max = crewMax();
-  const full = UI.playerCrew.length === max;
+  // a voyage sails with anyone from one to four; every other mode wants a full crew
+  const full = UI.voyageOutfit ? UI.playerCrew.length >= 1 : UI.playerCrew.length === max;
   const movesReady = UI.playerCrew.every(id => ensureLoadout(id).length === MOVESET_SIZE);
   btn.disabled = !full || !movesReady;
   if (!full) {
     const need = max - UI.playerCrew.length;
-    btn.textContent = `Choose ${need} more pirate${need === 1 ? '' : 's'}`;
+    btn.textContent = UI.voyageOutfit ? 'Choose at least one for the landing party' : `Choose ${need} more pirate${need === 1 ? '' : 's'}`;
   } else if (!movesReady) {
     const who = UI.playerCrew.find(id => ensureLoadout(id).length !== MOVESET_SIZE);
     btn.textContent = `Finish ${shortName(CHAR_BY_ID[who])}'s moveset (pick 4)`;
+  } else if (UI.voyageOutfit) {
+    btn.textContent = `⚓ Weigh anchor — ${SEA_BY_ID[UI.voyageOutfit].name}`;
   } else if (UI.storyChapter) {
     btn.textContent = `⚓ Set sail for ${UI.storyChapter.name}!`;
   } else {
@@ -491,9 +498,14 @@ function refreshOpponentOptions() {
 
 /* ============================ BATTLE SCREEN ============================ */
 
-function startBattle(playerIds, enemyIds, playerLoadouts, enemyLoadouts, playerLevels, enemyLevels) {
+/* `afterBuild` runs on the fresh Battle before anything is drawn — the seam a
+   voyage uses to graft carried-over damage onto the crew, since Fighter caches
+   maxHp at construction. */
+function startBattle(playerIds, enemyIds, playerLoadouts, enemyLoadouts, playerLevels, enemyLevels, afterBuild) {
   UI.lastCrews = { player: [...playerIds], enemy: [...enemyIds], playerLoadouts, enemyLoadouts, playerLevels, enemyLevels };
   UI.battle = new Battle(playerIds, enemyIds, { playerLoadouts, enemyLoadouts, playerLevels, enemyLevels });
+  if (afterBuild) afterBuild(UI.battle);
+  syncForfeitLabels();
   UI.busy = false;
   $('#battle-log').innerHTML = '';
   $('#turn-label').textContent = 'BATTLE START';
@@ -867,6 +879,7 @@ function buildTypeChart() {
 /* ---- result ---- */
 function showResult(winner) {
   UI.busy = false;
+  if (UI.voyageRun) return voyageFinishBattle(winner, UI.battle);
   if (UI.storyRun) return storyFinish(winner);
   showResultGeneric(winner, UI.battle);
 }
@@ -1206,6 +1219,8 @@ function openSelect(mode) {
   UI.mode = mode;
   UI.storyChapter = null;  // leaving Story Mode: full roster, free opponent
   UI.storyRun = null;
+  UI.voyageOutfit = null;  // …and leaving a voyage behind too
+  UI.voyageRun = null;
   UI.loadouts = {};        // re-default movesets for the chosen mode
   UI.playerCrew = [];
   UI.selectedPreset = null;
@@ -1234,12 +1249,14 @@ function openSelect(mode) {
 function dUnitEl(side, pos) { return document.querySelector(`#screen-doubles .d-unit[data-side="${side}"][data-slot="${pos}"]`); }
 function dFighterAt(side, pos) { return UI.dbl.battle.fighterAt(side, pos); }
 
-function startDoublesBattle(playerIds, enemyIds, playerLoadouts, enemyLoadouts, playerLevels, enemyLevels) {
+function startDoublesBattle(playerIds, enemyIds, playerLoadouts, enemyLoadouts, playerLevels, enemyLevels, afterBuild) {
   UI.dbl = {
     battle: new DoublesBattle(playerIds, enemyIds, { playerLoadouts, enemyLoadouts, playerLevels, enemyLevels }),
     lastCrews: { player: [...playerIds], enemy: [...enemyIds], playerLoadouts, enemyLoadouts, playerLevels, enemyLevels },
     busy: false, pending: [], queue: [], curSlot: null, pendingIdx: null,
   };
+  if (afterBuild) afterBuild(UI.dbl.battle);
+  syncForfeitLabels();
   $('#d-battle-log').innerHTML = '';
   $('#d-turn-label').textContent = '2v2 BATTLE';
   $('#d-prompt').textContent = '';
@@ -1543,6 +1560,7 @@ function dResolveRound() {
 }
 function dShowResult(winner) {
   UI.dbl.busy = false;
+  if (UI.voyageRun) return voyageFinishBattle(winner, UI.dbl.battle);
   if (UI.storyRun) return storyFinish(winner);
   showResultGeneric(winner, UI.dbl.battle);
 }
@@ -1556,6 +1574,8 @@ function openStory() {
   storyState();
   UI.storyChapter = null;
   UI.storyRun = null;
+  UI.voyageOutfit = null;
+  UI.voyageRun = null;
   renderStoryMap();
   showScreen('#screen-story');
 }
@@ -1739,6 +1759,510 @@ function renderCrewList() {
   }
 }
 
+/* ============================ UNCHARTED WATERS ============================ */
+
+/* Forfeiting means something different at sea, so the button says so. */
+function syncForfeitLabels() {
+  const voyage = !!UI.voyageRun;
+  const label = !voyage ? '🏳️ Forfeit'
+    : UI.voyageRun.rations > 0 ? `🏳️ Cut & Run (🍖 ${UI.voyageRun.rations})` : '🏳️ Abandon Voyage';
+  for (const sel of ['#btn-forfeit', '#d-btn-forfeit']) {
+    const b = $(sel);
+    if (b) b.textContent = label;
+  }
+}
+
+function worldSave() {
+  const st = storyState();
+  const w = worldEnsure(st);
+  w.run = UI.voyageRun || null;
+  saveStory(st);
+}
+
+function openWorld() {
+  const st = storyState();
+  const w = worldEnsure(st);
+  UI.storyChapter = null;
+  UI.storyRun = null;
+  UI.voyageOutfit = null;
+  UI.mode = 'single';
+  // a voyage left half-sailed in the save picks up exactly where it stopped:
+  // the chart is a pure function of its seed, so only the seed was ever stored
+  if (!UI.voyageRun && w.run) {
+    UI.voyageRun = w.run;
+    UI.voyageChart = generateChart(w.run.seaId, w.run.seed);
+    UI.loadouts = Object.assign({}, w.run.loadouts || {});
+  }
+  $('#world-berries').textContent = '🪙 ' + st.berries.toLocaleString();
+  if (UI.voyageRun && UI.voyageChart) return showVoyage();
+  UI.voyageRun = null;
+  UI.voyageChart = null;
+  $('#world-seas').style.display = '';
+  $('#world-run').style.display = 'none';
+  $('#btn-world-turnback').style.display = 'none';
+  renderSeaPicker();
+  showScreen('#screen-world');
+}
+
+function renderSeaPicker() {
+  const st = storyState();
+  const w = worldEnsure(st);
+  const box = $('#world-seas');
+  box.innerHTML = '';
+  for (const sea of SEAS) {
+    const open = seaUnlocked(st, sea);
+    const made = w.made[sea.id] || 0;
+    const gate = sea.gate ? STORY_BY_ID[sea.gate] : null;
+    const card = document.createElement('div');
+    card.className = 'sea-card' + (open ? '' : ' locked');
+    card.innerHTML = `
+      <div class="sc-flag">${sea.flag}</div>
+      <div class="sc-body">
+        <div class="sc-top">
+          <span class="sc-name">${sea.name}</span>
+          <span class="sc-status">${open ? (made ? '⚓ made port ×' + made : '▶ open water') : '🔒 clear ' + (gate ? gate.name : sea.gate)}</span>
+        </div>
+        <div class="sc-blurb">${sea.blurb}</div>
+        <div class="sc-meta">Foes Lv ${sea.lo}–${sea.hi} · ${sea.cols} islands to ${sea.portName} · 🪙 harbour bonus ${sea.portBerries.toLocaleString()}</div>
+      </div>`;
+    if (open) card.addEventListener('click', () => { SFX.click(); openVoyageOutfit(sea.id); });
+    box.appendChild(card);
+  }
+}
+
+/* Outfitting reuses the crew builder, restricted to your recruits — the same
+   trick Story Mode plays, except a landing party is one to four, not exactly N. */
+function openVoyageOutfit(seaId) {
+  const st = storyState();
+  const sea = SEA_BY_ID[seaId];
+  UI.voyageOutfit = seaId;
+  UI.storyChapter = null;
+  UI.mode = 'single';
+  UI.loadouts = {};
+  UI.selectedPreset = null;
+  UI.playerCrew = (st.party || []).filter(id => st.roster.indexOf(id) >= 0).slice(0, VOYAGE_PARTY_MAX);
+  if (!UI.playerCrew.length) UI.playerCrew = st.roster.slice(0, VOYAGE_PARTY_MAX);
+  UI.playerCrew.forEach(ensureLoadout);
+
+  const h2 = document.querySelector('#screen-select .select-header h2');
+  if (h2) h2.textContent = `${sea.flag} ${sea.name} — choose up to ${VOYAGE_PARTY_MAX} for the landing party`;
+  const tabs = document.querySelector('#screen-select .tabs');
+  if (tabs) tabs.style.display = 'none';
+  $('#preset-grid').style.display = 'none';
+  $('#custom-builder').style.display = 'grid';
+  const saved = $('#saved-teams'); if (saved) saved.style.display = 'none';
+  storyToggleOpponentRow(false);
+
+  buildRosterGrid();
+  renderCrewSlots();
+  showDetail(UI.playerCrew[0] || st.roster[0]);
+  updateBattleButton();
+  showScreen('#screen-select');
+}
+
+function startVoyage() {
+  const st = storyState();
+  const seaId = UI.voyageOutfit;
+  st.party = [...UI.playerCrew];
+  const seed = Math.floor(Math.random() * 4294967295) >>> 0;
+  UI.voyageChart = generateChart(seaId, seed);
+  UI.voyageRun = newVoyage(st, seaId, [...UI.playerCrew], seed);
+  UI.voyageRun.loadouts = {};
+  for (const id of UI.playerCrew) UI.voyageRun.loadouts[id] = ensureLoadout(id).slice();
+  UI.voyageOutfit = null;
+  UI.voyageToast = '⚓ Lines cast off. Chart a course east.';
+  worldSave();
+  openWorld();
+}
+
+function showVoyage() {
+  $('#world-seas').style.display = 'none';
+  $('#world-run').style.display = '';
+  $('#btn-world-turnback').style.display = UI.voyageRun.legs >= 1 ? '' : 'none';
+  $('#world-berries').textContent = '🪙 ' + storyState().berries.toLocaleString();
+  renderChart();
+  renderVoyageStatus();
+  showScreen('#screen-world');
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function renderChart() {
+  const chart = UI.voyageChart, run = UI.voyageRun;
+  const box = $('#world-chart');
+  box.innerHTML = '';
+
+  // routes first, as an SVG underlay stretched to the box (0-100 in both axes
+  // maps straight onto the percentage coordinates the islands are placed at)
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 100 100');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  for (const n of chart.nodes) {
+    for (const id of n.to) {
+      const m = chart.byId[id];
+      if (!m) continue;
+      const live = n.id === run.at;
+      const line = document.createElementNS(SVG_NS, 'line');
+      line.setAttribute('x1', n.x * 100); line.setAttribute('y1', n.y * 100);
+      line.setAttribute('x2', m.x * 100); line.setAttribute('y2', m.y * 100);
+      line.setAttribute('stroke', live ? 'rgba(232,184,74,0.8)' : 'rgba(255,255,255,0.13)');
+      line.setAttribute('stroke-width', live ? 0.45 : 0.22);
+      line.setAttribute('vector-effect', 'non-scaling-stroke');
+      svg.appendChild(line);
+    }
+  }
+  box.appendChild(svg);
+
+  const routes = chartRoutes(chart, run.at).map(n => n.id);
+  for (const n of chart.nodes) {
+    const here = n.id === run.at;
+    const reachable = routes.indexOf(n.id) >= 0;
+    const been = run.visited.indexOf(n.id) >= 0;
+    const el = document.createElement('div');
+    el.className = 'wnode' + (here ? ' here' : reachable ? ' reachable' : been ? ' visited' : ' far')
+      + (n.kind === 'port' ? ' port-node' : '');
+    el.style.left = (n.x * 100) + '%';
+    el.style.top = (n.y * 100) + '%';
+    // only water you can actually reach shows its colours; the rest is fog
+    const known = here || reachable || been || n.kind === 'port';
+    const lv = n.fight ? `<div class="wn-lv">Lv ${voyageFoeLevel(run, n)}</div>` : '';
+    el.innerHTML = known
+      ? `<div class="wn-flag">${n.flag}</div><div>${n.kind === 'port' ? n.title : VOYAGE_KIND_BY_ID[n.kind] ? VOYAGE_KIND_BY_ID[n.kind].name : n.title}</div>${reachable ? lv : ''}`
+      : '<div class="wn-flag">🌫️</div><div>uncharted</div>';
+    if (reachable) {
+      el.title = n.kind === 'port' ? 'Make port and bank the hold' : n.blurb;
+      el.addEventListener('click', () => { SFX.click(); worldSail(n.id); });
+    }
+    box.appendChild(el);
+  }
+}
+
+function renderVoyageStatus() {
+  const st = storyState(), run = UI.voyageRun;
+  const box = $('#world-status');
+  box.innerHTML = '';
+  const crew = document.createElement('div');
+  crew.className = 'wcrew';
+  for (const id of run.party) {
+    const frac = run.hp[id];
+    const pip = document.createElement('div');
+    pip.className = 'wpip' + (frac > 0 ? '' : ' down');
+    pip.appendChild(makeSpriteCanvas(id, 3, false));
+    const info = document.createElement('div');
+    info.className = 'wp-info';
+    const status = run.status[id] ? ` <span class="wp-status">${STATUS_ICONS[run.status[id]] || ''}</span>` : '';
+    const cls = frac > 0.5 ? '' : frac > 0.22 ? ' mid' : ' low';
+    info.innerHTML = `<div class="wp-name">${shortName(CHAR_BY_ID[id])} <span class="wn-lv">Lv ${levelOf(st, id)}</span>${status}</div>
+      <div class="hp-track"><div class="hp-fill${cls}" style="width:${Math.max(0, frac) * 100}%"></div></div>`;
+    pip.appendChild(info);
+    crew.appendChild(pip);
+  }
+  box.appendChild(crew);
+
+  const hold = document.createElement('div');
+  hold.className = 'whold';
+  hold.innerHTML = `🍖 ${run.rations} rations · ⚓ Hold: ${run.hold.xp.toLocaleString()} XP · 🪙 ${run.hold.berries.toLocaleString()}
+    <span class="wh-sub">${UI.voyageToast || `Leg ${run.legs} · nothing is yours until you make port`}</span>`;
+  box.appendChild(hold);
+}
+
+function worldSail(nodeId) {
+  const node = voyageSail(UI.voyageChart, UI.voyageRun, nodeId);
+  if (!node) return;
+  UI.voyageToast = null;
+  worldSave();
+  if (node.kind === 'port') return endVoyage('port');
+  renderChart();
+  renderVoyageStatus();
+  openEncounter(node);
+}
+
+/* ---- the encounter card ---- */
+
+const THREAT_LABELS = [
+  { cls: 'calm', text: '⚓ Calm' },
+  { cls: 'choppy', text: '🌊 Choppy' },
+  { cls: 'rough', text: '🌀 Rough' },
+  { cls: 'deadly', text: '💀 Deadly' },
+];
+
+function closeEncounter() { $('#modal-encounter').classList.remove('open'); }
+
+function encButton(label, cls, fn) {
+  const b = document.createElement('button');
+  b.className = 'btn' + (cls ? ' ' + cls : '');
+  b.textContent = label;
+  b.addEventListener('click', () => { SFX.click(); fn(); });
+  return b;
+}
+
+function openEncounter(node) {
+  const st = storyState(), run = UI.voyageRun;
+  UI.voyageNode = node;
+  const lv = voyageFoeLevel(run, node);
+  const threat = THREAT_LABELS[voyageThreat(st, run, node)];
+
+  $('#enc-title').textContent = `${node.flag} ${node.title}`;
+  const th = $('#enc-threat');
+  th.className = 'threat ' + threat.cls;
+  th.textContent = threat.text;
+  $('#enc-blurb').textContent = node.blurb;
+
+  const foes = $('#enc-foes');
+  foes.innerHTML = '';
+  for (const id of node.foes) {
+    const ef = document.createElement('div');
+    ef.className = 'ef';
+    ef.appendChild(makeSpriteCanvas(id, 6, true));
+    const nm = document.createElement('span');
+    nm.textContent = shortName(CHAR_BY_ID[id]);
+    ef.appendChild(nm);
+    const l = document.createElement('span');
+    l.className = 'ef-lv';
+    l.textContent = 'Lv ' + lv;
+    ef.appendChild(l);
+    foes.appendChild(ef);
+  }
+
+  const xp = nodeXp(node, lv), berries = nodeBerries(node, lv);
+  const pay = [];
+  if (xp) pay.push(`+${xp.toLocaleString()} XP`);
+  if (berries) pay.push(`+🪙 ${berries.toLocaleString()}`);
+  $('#enc-payout').textContent = pay.length ? 'Into the hold: ' + pay.join(' · ') : '';
+
+  const duels = $('#enc-duelists');
+  duels.innerHTML = '';
+  const actions = $('#enc-actions');
+  actions.innerHTML = '';
+
+  if (node.fight === 'duel') {
+    // one-on-one, and WHICH of your crew takes it is the decision of the mode:
+    // this engine has very little middle ground, so the type matchup decides
+    duels.appendChild(Object.assign(document.createElement('div'), {
+      className: 'enc-payout', textContent: 'One on one. Who takes this?', style: 'grid-column:1/-1',
+    }));
+    for (const id of voyageStanding(run)) {
+      const card = document.createElement('div');
+      card.className = 'duelist';
+      card.appendChild(makeSpriteCanvas(id, 5, false));
+      const v = duelVerdict(id, node.foes[0], lv);
+      const frac = run.hp[id];
+      const cls = frac > 0.5 ? '' : frac > 0.22 ? ' mid' : ' low';
+      const nm = document.createElement('div');
+      nm.className = 'd-name';
+      nm.textContent = `${shortName(CHAR_BY_ID[id])} Lv ${levelOf(st, id)}`;
+      card.appendChild(nm);
+      const track = document.createElement('div');
+      track.className = 'hp-track';
+      track.innerHTML = `<div class="hp-fill${cls}" style="width:${frac * 100}%"></div>`;
+      card.appendChild(track);
+      const verdict = document.createElement('div');
+      verdict.className = 'd-verdict ' + v.cls;
+      verdict.textContent = v.text;
+      card.appendChild(verdict);
+      card.addEventListener('click', () => { SFX.click(); voyageEngage(id); });
+      duels.appendChild(card);
+    }
+  } else if (node.fight) {
+    actions.appendChild(encButton('⚔️ Engage', 'btn-gold', () => voyageEngage(null)));
+  } else {
+    const label = node.kind === 'storm' ? '🌩️ Ride it out' : node.kind === 'anchorage' ? '⚓ Drop anchor' : '🫱 Take it';
+    actions.appendChild(encButton(label, 'btn-gold', () => voyageEvent(node)));
+  }
+
+  if (node.fight && run.rations > 0) {
+    actions.appendChild(encButton(`🍖 Use a ration (${run.rations})`, '', () => {
+      if (useRation(run)) { SFX.heal(); worldSave(); renderVoyageStatus(); openEncounter(node); }
+    }));
+  }
+  $('#modal-encounter').classList.add('open');
+}
+
+/* Ask the engine itself how this duel looks — the same tempo score its AI uses
+   to decide who to send in. */
+function duelVerdict(id, foeId, lv) {
+  const st = storyState();
+  const probe = new Battle([id], [foeId], { playerLevels: [levelOf(st, id)], enemyLevels: lv, playerLoadouts: [loadoutMoves(id)] });
+  const me = probe.sides.player.crew[0], them = probe.sides.enemy.crew[0];
+  me.hp = Math.max(1, Math.round(me.maxHp * UI.voyageRun.hp[id]));
+  const s = probe.matchupScore(me, them);
+  if (s > 0.12) return { cls: 'good', text: 'Favourable' };
+  if (s < -0.12) return { cls: 'bad', text: 'Grim' };
+  return { cls: 'even', text: 'Even' };
+}
+
+/* Islands with no fight on them resolve in place, then report what happened. */
+function voyageEvent(node) {
+  const st = storyState(), run = UI.voyageRun;
+  const out = voyageResolveEvent(st, run, node, Math.random);
+  worldSave();
+  const bits = [];
+  if (out.berries) bits.push(`🪙 +${out.berries.toLocaleString()} into the hold`);
+  if (out.xp) bits.push(`+${out.xp.toLocaleString()} XP`);
+  if (out.rations) bits.push(`🍖 +${out.rations} ration`);
+  if (out.healed.length) bits.push(`💚 the crew rests — ${out.healed.map(id => shortName(CHAR_BY_ID[id])).join(', ')} patched up`);
+  if (out.hurt.length) bits.push(`💥 the squall batters everyone`);
+  if (out.ko.length) bits.push(`☠️ ${out.ko.map(id => shortName(CHAR_BY_ID[id])).join(', ')} went down`);
+  if (out.recruit) bits.push(`🤝 ${CHAR_BY_ID[out.recruit.id].name} joins at the ledger — if you make it home`);
+
+  $('#enc-blurb').textContent = bits.length ? bits.join(' · ') : 'Nothing but open water.';
+  $('#enc-payout').textContent = '';
+  $('#enc-duelists').innerHTML = '';
+  const actions = $('#enc-actions');
+  actions.innerHTML = '';
+  actions.appendChild(encButton('⛵ Sail on', 'btn-gold', () => {
+    closeEncounter();
+    if (run.over === 'wipe') return endVoyage('wipe');
+    UI.voyageToast = bits[0] || null;
+    showVoyage();
+  }));
+  (out.ko.length ? SFX.lose : out.healed.length ? SFX.heal : SFX.click)();
+  renderVoyageStatus();
+}
+
+/* ---- fights ---- */
+
+/* Fighter freezes maxHp at construction, so carried damage has to be grafted
+   on after the crew is built but before anything is drawn. */
+function voyageGraft(battle, ids) {
+  const run = UI.voyageRun;
+  battle.sides.player.crew.forEach((f, i) => {
+    const id = ids[i];
+    if (!id || run.hp[id] === undefined) return;
+    f.hp = Math.max(1, Math.round(f.maxHp * run.hp[id]));
+    f.status = run.status[id] || null;
+  });
+}
+
+function voyageEngage(duelistId) {
+  const st = storyState(), run = UI.voyageRun, node = UI.voyageNode;
+  closeEncounter();
+  const ids = duelistId ? [duelistId] : voyageStanding(run);
+  if (!ids.length) return endVoyage('wipe');
+  UI.voyageIds = ids;
+  const levels = ids.map(id => levelOf(st, id));
+  const lv = voyageFoeLevel(run, node);
+  const graft = b => voyageGraft(b, ids);
+  if (node.fight === 'doubles' && ids.length >= 2) {
+    UI.mode = 'doubles';
+    startDoublesBattle(ids, node.foes.slice(), ids.map(id => loadoutMoves(id)), undefined, levels, lv, graft);
+  } else {
+    UI.mode = 'single';
+    startBattle(ids, node.foes.slice(), ids.map(id => loadoutMoves(id)), undefined, levels, lv, graft);
+  }
+}
+
+function voyageFinishBattle(winner, battle) {
+  const st = storyState(), run = UI.voyageRun, node = UI.voyageNode;
+  const ids = UI.voyageIds || [];
+  // never trust `winner` alone: a 1v1 can never report a draw, and forfeiting
+  // short-circuits the engine entirely — so read the crew back off the battle
+  const entries = battle.sides.player.crew.map((f, i) => ({
+    id: ids[i], hp: f.alive ? f.hp / f.maxHp : 0, status: f.status,
+  }));
+  const standing = battle.sides.player.crew.some(f => f.alive);
+  const res = voyageResolveBattle(st, run, node, winner === 'player' && standing, entries);
+  UI.mode = 'single';
+  worldSave();
+  if (run.over === 'wipe') return endVoyage('wipe');
+  const bits = [res.won ? '⚔️ The water is yours' : '🩸 Beaten off, but still afloat'];
+  if (res.xp) bits.push(`+${res.xp.toLocaleString()} XP`);
+  if (res.berries) bits.push(`🪙 +${res.berries.toLocaleString()}`);
+  if (res.ko.length) bits.push(`☠️ ${res.ko.map(id => shortName(CHAR_BY_ID[id])).join(', ')} down`);
+  UI.voyageToast = bits.join(' · ');
+  showVoyage();
+}
+
+/* Forfeiting a sea fight is Cut & Run: a ration and blood to break off and
+   keep sailing — or, with the stores empty, abandoning the voyage outright. */
+function worldCutAndRun() {
+  const run = UI.voyageRun;
+  const battle = UI.mode === 'doubles' && UI.dbl ? UI.dbl.battle : UI.battle;
+  const ids = UI.voyageIds || [];
+  if (run.rations <= 0) {
+    if (!confirm('No rations left — breaking off now means abandoning the voyage. The hold pays a quarter of the XP and none of the coin. Abandon?')) return;
+    for (const id of run.party) run.hp[id] = 0;
+    return endVoyage('wipe');
+  }
+  if (!confirm('Cut and run? One ration and 15% of everyone\'s health, and this island\'s spoils are lost — but the voyage goes on.')) return;
+  voyageSync(run, battle.sides.player.crew.map((f, i) => ({
+    id: ids[i], hp: f.alive ? f.hp / f.maxHp : 0, status: f.status,
+  })));
+  voyageCutAndRun(run);
+  UI.mode = 'single';
+  worldSave();
+  if (run.over === 'wipe') return endVoyage('wipe');
+  UI.voyageToast = '🏳️ You broke off and ran. One ration spent.';
+  showVoyage();
+}
+
+/* ---- the ledger ---- */
+
+function endVoyage(how) {
+  const st = storyState(), run = UI.voyageRun;
+  const res = voyageBank(st, run, how);
+  UI.voyageRun = null;
+  UI.voyageChart = null;
+  UI.voyageNode = null;
+  UI.voyageIds = null;
+  UI.voyageToast = null;
+  UI.mode = 'single';
+  saveStory(st);
+  renderVoyageResult(SEA_BY_ID[run.seaId], run, res);
+  showScreen('#screen-voyage-result');
+}
+
+function renderVoyageResult(sea, run, res) {
+  const st = storyState();
+  const t = $('#vr-title');
+  t.textContent = res.title;
+  t.className = 'result-title ' + (res.how === 'wipe' ? 'lose' : 'win');
+  $('#vr-sub').textContent = res.how === 'port'
+    ? `${sea.flag} ${run.legs} islands crossed and the lamps of ${sea.portName} dead ahead. Every beri is yours.`
+    : res.how === 'turnback'
+      ? `You came about ${run.legs} islands out. Half a hold beats no hold — and no crew lost to the deep.`
+      : `${sea.name} closed over the lot of you. The coin is gone; the crew will mend.`;
+
+  const box = $('#vr-rewards');
+  box.innerHTML = '';
+  const line = (label, value) => {
+    const d = document.createElement('div');
+    d.className = 'sr-line';
+    d.innerHTML = `<span class="sr-label">${label}</span><span class="sr-value">${value}</span>`;
+    box.appendChild(d);
+  };
+  line('🧭 Islands crossed', run.legs);
+  line('⭐ XP banked', `+${res.xpEach.toLocaleString()} to each of the landing party`);
+  line('🪙 Berries', res.berries
+    ? `+${res.berries.toLocaleString()}${res.bonus ? ` (incl. 🏮 ${res.bonus.toLocaleString()} harbour bonus)` : ''}  ·  total ${st.berries.toLocaleString()}`
+    : 'none — the sea took the hold');
+  if (res.levelUps.length) {
+    line('📈 Level up', res.levelUps.map(l => `${shortName(CHAR_BY_ID[l.id])} Lv ${l.from}→${l.to}`).join(' · '));
+  }
+  if (res.down.length) {
+    line('☠️ Went down', res.down.map(id => shortName(CHAR_BY_ID[id])).join(' · ') + ' — patched up back on land');
+  }
+  if (res.recruited.length) {
+    const d = document.createElement('div');
+    d.className = 'sr-recruits';
+    d.innerHTML = '<div class="sr-label">🤝 Pulled from the water</div>';
+    const row = document.createElement('div');
+    row.className = 'sr-faces';
+    for (const id of res.recruited) {
+      const f = document.createElement('div');
+      f.className = 'rf';
+      f.appendChild(makeSpriteCanvas(id, 4, false));
+      const nm = document.createElement('span');
+      nm.textContent = `${shortName(CHAR_BY_ID[id])} Lv ${levelOf(st, id)}`;
+      f.appendChild(nm);
+      row.appendChild(f);
+    }
+    d.appendChild(row);
+    box.appendChild(d);
+  }
+  (res.how === 'wipe' ? SFX.lose : SFX.win)();
+}
+
 /* ============================ WIRING ============================ */
 
 function initUI() {
@@ -1773,15 +2297,30 @@ function initUI() {
   }));
 
   $('#btn-battle').addEventListener('click', () => {
-    if (UI.playerCrew.length !== crewMax()) return;
+    const enough = UI.voyageOutfit ? UI.playerCrew.length >= 1 : UI.playerCrew.length === crewMax();
+    if (!enough) return;
     if (!UI.playerCrew.every(id => ensureLoadout(id).length === MOVESET_SIZE)) return;
     SFX.click();
     const loadouts = UI.playerCrew.map(id => loadoutMoves(id));
+    if (UI.voyageOutfit) return startVoyage();
     if (UI.storyChapter) return startStoryBattle();
     const opp = pickOpponent();
     if (UI.mode === 'doubles') startDoublesBattle([...UI.playerCrew], opp.ids, loadouts, opp.loadouts);
     else startBattle([...UI.playerCrew], opp.ids, loadouts, opp.loadouts);
   });
+
+  // ---- uncharted waters ----
+  $('#btn-world').addEventListener('click', () => { SFX.click(); openWorld(); });
+  $('#btn-world-back').addEventListener('click', () => { SFX.click(); showScreen('#screen-title'); });
+  $('#btn-world-crew').addEventListener('click', () => { SFX.click(); openCrewModal(); });
+  $('#btn-world-turnback').addEventListener('click', () => {
+    if (!UI.voyageRun) return;
+    if (!confirm('Come about and run for home? You keep half the hold and every soul aboard.')) return;
+    SFX.click();
+    endVoyage('turnback');
+  });
+  $('#btn-vr-again').addEventListener('click', () => { SFX.click(); openWorld(); });
+  $('#btn-vr-title').addEventListener('click', () => { SFX.click(); showScreen('#screen-title'); });
 
   // ---- story mode ----
   $('#btn-story').addEventListener('click', () => { SFX.click(); openStory(); });
@@ -1806,6 +2345,7 @@ function initUI() {
 
   $('#d-btn-forfeit').addEventListener('click', () => {
     if (UI.dbl && UI.dbl.busy) return;
+    if (UI.voyageRun) return worldCutAndRun();
     if (confirm('Strike your colors and forfeit this 2v2?')) dShowResult('enemy');
   });
 
@@ -1819,6 +2359,7 @@ function initUI() {
   $('#btn-switch-cancel').addEventListener('click', closeSwitchModal);
   $('#btn-forfeit').addEventListener('click', () => {
     if (UI.busy) return;
+    if (UI.voyageRun) return worldCutAndRun();
     if (confirm('Strike your colors and forfeit this battle?')) showResult('enemy');
   });
 

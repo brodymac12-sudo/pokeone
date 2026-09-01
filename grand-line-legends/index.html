@@ -19,13 +19,14 @@
     <p class="tagline">Assemble your pirate crew. Master 16 powers of the sea. Conquer the Grand Line.</p>
     <div class="title-actions">
       <button id="btn-story" class="btn btn-gold btn-big">🗺️ Story Mode</button>
+      <button id="btn-world" class="btn btn-ghost btn-big">🧭 Uncharted Waters</button>
       <button id="btn-setsail" class="btn btn-ghost btn-big">⚓ Free Battle</button>
       <button id="btn-doubles" class="btn btn-ghost btn-big">⚔️ 2v2 Doubles</button>
       <button id="btn-tournament" class="btn btn-ghost btn-big">🏆 Tournament</button>
       <button id="btn-library" class="btn btn-ghost btn-big">📖 Library</button>
       <button id="btn-typechart" class="btn btn-ghost btn-big">📜 Type Chart</button>
     </div>
-    <div class="title-foot">A fan-made tactical battler inspired by One Piece · 14-island story campaign · 33 legends · 11 Awakenings</div>
+    <div class="title-foot">A fan-made tactical battler inspired by One Piece · 14-island story campaign · open-sea voyages · 33 legends · 11 Awakenings</div>
     <div class="wave-band"></div>
   </section>
 
@@ -53,6 +54,54 @@
       <button id="btn-sr-retry" class="btn btn-big">🔁 Try Again</button>
     </div>
   </section>
+
+  <!-- ==================== UNCHARTED WATERS ==================== -->
+  <section id="screen-world" class="screen">
+    <div class="select-header">
+      <h2>🧭 Uncharted Waters</h2>
+      <div class="select-actions">
+        <span id="world-berries" class="berry-tag">🪙 0</span>
+        <button id="btn-world-crew" class="btn">👥 Crew &amp; Training</button>
+        <button id="btn-world-turnback" class="btn" style="display:none">⚓ Turn Back</button>
+        <button id="btn-world-back" class="btn">← Title</button>
+      </div>
+    </div>
+
+    <!-- shown between voyages: pick a sea -->
+    <div id="world-seas" class="world-seas"></div>
+
+    <!-- shown while a voyage is under way: the chart -->
+    <div id="world-run" style="display:none;width:100%">
+      <div id="world-chart" class="world-chart"></div>
+      <div id="world-status" class="world-status"></div>
+    </div>
+  </section>
+
+  <!-- ==================== VOYAGE LEDGER ==================== -->
+  <section id="screen-voyage-result" class="screen">
+    <h1 id="vr-title" class="result-title win">MADE PORT!</h1>
+    <p id="vr-sub" class="result-sub"></p>
+    <div id="vr-rewards" class="sr-rewards"></div>
+    <div class="result-actions">
+      <button id="btn-vr-again" class="btn btn-gold btn-big">🧭 Chart a New Course</button>
+      <button id="btn-vr-title" class="btn btn-big">🏠 Title</button>
+    </div>
+  </section>
+
+  <!-- ==================== ENCOUNTER ==================== -->
+  <div id="modal-encounter" class="modal-back">
+    <div class="modal modal-wide">
+      <div class="modal-head">
+        <h3 id="enc-title">Encounter</h3>
+        <span id="enc-threat" class="threat"></span>
+      </div>
+      <p id="enc-blurb" class="enc-blurb"></p>
+      <div id="enc-foes" class="enc-foes"></div>
+      <div id="enc-duelists" class="enc-duelists"></div>
+      <div id="enc-payout" class="enc-payout"></div>
+      <div class="modal-foot" id="enc-actions"></div>
+    </div>
+  </div>
 
   <!-- ==================== CREW SELECT ==================== -->
   <section id="screen-select" class="screen">
@@ -299,6 +348,7 @@
 
 <script src="js/data.js"></script>
 <script src="js/story.js"></script>
+<script src="js/world.js"></script>
 <script src="js/sprites.js"></script>
 <script src="js/engine.js"></script>
 <script src="js/ui.js"></script>

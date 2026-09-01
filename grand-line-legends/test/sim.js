@@ -5,7 +5,7 @@ const path = require('path');
 const vm = require('vm');
 
 const root = path.join(__dirname, '..');
-const code = ['js/data.js', 'js/story.js', 'js/engine.js', 'js/sprites.js']
+const code = ['js/data.js', 'js/story.js', 'js/engine.js', 'js/world.js', 'js/sprites.js']
   .map(f => fs.readFileSync(path.join(root, f), 'utf8'))
   .join('\n;\n');
 
@@ -554,6 +554,315 @@ console.log(`  marathon: ${tStats.marathon.a} vs ${tStats.marathon.b} avg ${tSta
   console.log(`\nstory: ${completed}/${RUNS} campaigns completed, ${(totalTries / RUNS).toFixed(1)} avg attempts across ${sandbox.STORY.length} chapters`);
   check(completed === RUNS, `every simulated campaign is winnable (${completed}/${RUNS})`);
   check(totalTries / RUNS < 70, 'the difficulty curve does not demand excessive grinding');
+}
+
+/* ---- uncharted waters: sea + encounter data ---- */
+{
+  const { SEAS, VOYAGE_KINDS, SEA_BY_ID } = sandbox;
+  check(SEAS.length >= 4, `the world has seas (got ${SEAS.length})`);
+  const seen = new Set();
+  let prevHi = 0;
+  SEAS.forEach((sea, i) => {
+    check(!seen.has(sea.id), `sea ${sea.id} unique`); seen.add(sea.id);
+    check(sea.name && sea.flag && sea.blurb && sea.portName, `${sea.id}: has presentation copy`);
+    check(!sea.gate || sandbox.STORY_BY_ID[sea.gate], `${sea.id}: gate is a real chapter`);
+    check(sea.lo >= 1 && sea.hi > sea.lo, `${sea.id}: sane level band`);
+    check(sea.lo > prevHi - 12, `${sea.id}: bands step up rather than jump`);
+    check(sea.hi > prevHi, `${sea.id}: deeper water is deadlier (hi ${sea.hi} after ${prevHi})`);
+    prevHi = sea.hi;
+    check(sea.cols >= 5, `${sea.id}: enough islands for a voyage`);
+    check(sea.portBerries > 0, `${sea.id}: the harbour pays a bonus`);
+    check(sea.pool.length >= 5 && sea.pool.every(id => sandbox.CHAR_BY_ID[id]), `${sea.id}: spawn pool is real fighters`);
+    check(sea.marines.every(id => sandbox.CHAR_BY_ID[id]), `${sea.id}: marines are real fighters`);
+    check(sea.crews.length && sea.crews.every(c => PRESET_CREWS.some(p => p.id === c)), `${sea.id}: rival crews exist`);
+    check(sea.patrolSize >= 2, `${sea.id}: a patrol is more than one`);
+    // the sea a chapter opens must not be wildly beyond the crew that opened it
+    if (sea.gate) check(sea.lo <= sandbox.STORY_BY_ID[sea.gate].level + 2, `${sea.id}: opens at a level the gating island prepares you for`);
+  });
+  check(SEAS[0].gate === null, 'the first sea needs no key');
+
+  const kinds = new Set();
+  for (const k of VOYAGE_KINDS) {
+    check(!kinds.has(k.id), `kind ${k.id} unique`); kinds.add(k.id);
+    check(k.name && k.flag && k.blurb, `${k.id}: has presentation copy`);
+    check(k.w.length === SEAS.length, `${k.id}: a weight for every sea`);
+    check(k.w.some(w => w > 0), `${k.id}: is reachable somewhere`);
+    check(k.depth.length === 2 && k.depth.every(d => d > 0), `${k.id}: has a depth curve`);
+    check(k.fight === null || ['duel', 'single', 'doubles'].indexOf(k.fight) >= 0, `${k.id}: valid fight shape`);
+  }
+  check(VOYAGE_KINDS.some(k => k.fight === 'doubles'), 'the sea can throw a 2v2 at you');
+  check(VOYAGE_KINDS.some(k => k.fight === null), 'not every island is a fight');
+  check(!!SEA_BY_ID['east-blue'], 'seas are indexed by id');
+}
+
+/* ---- chart generation is pure, connected and fair ---- */
+{
+  const S = sandbox;
+  const summarise = ch => ch.nodes.map(n => [n.id, n.kind, n.level, (n.foes || []).join('/'), n.to.join('|')].join(',')).join(';');
+  check(summarise(S.generateChart('paradise', 42)) === summarise(S.generateChart('paradise', 42)), 'the same seed always draws the same chart');
+  check(summarise(S.generateChart('paradise', 42)) !== summarise(S.generateChart('paradise', 43)), 'a different seed draws a different chart');
+
+  let charts = 0, orphans = 0, deadEnds = 0, badFoes = 0, harshOpeners = 0;
+  const kindsSeen = new Set();
+  for (const sea of S.SEAS) {
+    for (let seed = 0; seed < 60; seed++) {
+      const ch = S.generateChart(sea.id, seed);
+      charts++;
+      // every island must be reachable from the start, and lead somewhere
+      const reached = new Set(['start']);
+      const queue = ['start'];
+      while (queue.length) {
+        for (const t of ch.byId[queue.shift()].to) if (!reached.has(t)) { reached.add(t); queue.push(t); }
+      }
+      if (!reached.has('port')) orphans++;
+      for (const n of ch.nodes) {
+        if (!reached.has(n.id)) orphans++;
+        if (n.id !== 'port' && !n.to.length) deadEnds++;
+        if (n.kind === 'start' || n.kind === 'port') continue;
+        kindsSeen.add(n.kind);
+        if (n.foes.some(f => !S.CHAR_BY_ID[f])) badFoes++;
+        if (n.fight && !n.foes.length) badFoes++;
+        if (n.col === 0 && ['patrol', 'rival', 'bounty', 'storm'].indexOf(n.kind) >= 0) harshOpeners++;
+        if (n.x <= 0 || n.x >= 1 || n.y <= 0 || n.y >= 1) badFoes++;   // must sit inside the chart box
+      }
+    }
+  }
+  check(orphans === 0, `every island on every chart is reachable (${orphans} orphans in ${charts} charts)`);
+  check(deadEnds === 0, `no island is a dead end (${deadEnds})`);
+  check(badFoes === 0, `every encounter is well-formed (${badFoes} bad)`);
+  check(harshOpeners === 0, `the first island is never a death sentence (${harshOpeners})`);
+  check(kindsSeen.size === S.VOYAGE_KINDS.length, `every encounter kind actually appears (${kindsSeen.size}/${S.VOYAGE_KINDS.length})`);
+  console.log(`charts: ${charts} generated, ${kindsSeen.size} encounter kinds in play`);
+}
+
+/* ---- the sea's economy hangs off the campaign's ---- */
+{
+  const S = sandbox;
+  const st = S.newStoryState();
+  const w = S.worldEnsure(st);
+  check(w && w.run === null && w.voyages === 0, 'a fresh save has an empty sea log');
+  check(S.seaUnlocked(st, S.SEA_BY_ID['east-blue']), 'East Blue is open from the start');
+  check(!S.seaUnlocked(st, S.SEA_BY_ID['new-world']), 'the New World stays shut until Marineford');
+  st.cleared.push('marineford');
+  check(S.seaUnlocked(st, S.SEA_BY_ID['new-world']), 'clearing the gating island opens the sea');
+
+  // payouts are multiples of xpToNext, so an island is worth the same slice of
+  // a level at 6 as it is at 62 — the same anchor the campaign is tuned to
+  const node = { kind: 'patrol', xpMul: 0.7, berryMul: 0.4, level: 20, depth: 0.5, fight: 'single', foes: ['nami'] };
+  for (const lv of [6, 20, 45, 70]) {
+    const ratio = S.nodeXp(node, lv) / sandbox.xpToNext(lv);
+    check(Math.abs(ratio - 0.7) < 0.01, `payouts stay level-neutral (Lv ${lv} → ${ratio.toFixed(3)})`);
+  }
+  check(S.nodeXp(node, 30) < sandbox.chapterXp(sandbox.STORY[6], true), 'one island is worth less than a whole chapter');
+  check(S.nodeBerries(node, 30) > 0, 'a patrol pays coin');
+
+  // banking: everything at port, half for turning back, a quarter and no coin for a wipe
+  const mk = () => {
+    const s = S.newStoryState();
+    S.recruit(s, 'zoro', 10);
+    const run = S.newVoyage(s, 'east-blue', ['luffy', 'zoro'], 5);
+    run.legs = 4;
+    run.hold.xp = 1000; run.hold.berries = 800;
+    return { s, run };
+  };
+  const atPort = mk(); const portRes = S.voyageBank(atPort.s, atPort.run, 'port');
+  const back = mk(); const backRes = S.voyageBank(back.s, back.run, 'turnback');
+  const lost = mk(); const lostRes = S.voyageBank(lost.s, lost.run, 'wipe');
+  check(portRes.xpEach === 1000 && backRes.xpEach === 500 && lostRes.xpEach === 250, 'the hold pays out by how the voyage ended');
+  check(portRes.berries > 800 && portRes.bonus > 0, 'making port adds a harbour bonus');
+  check(backRes.berries === 400 && lostRes.berries === 0, 'turning back keeps half the coin; a wipe keeps none');
+  check(atPort.s.berries === portRes.berries, 'banked berries land in the campaign purse');
+  check(S.levelOf(atPort.s, 'luffy') > S.STORY_START_LEVEL, 'banked XP levels the landing party');
+  check(S.worldEnsure(atPort.s).made['east-blue'] === 1, 'the sea log remembers a successful voyage');
+  check(S.worldEnsure(atPort.s).run === null, 'banking closes the voyage');
+
+  // recruits are the one thing the sea never takes back
+  const wiped = mk();
+  wiped.run.hold.recruits.push({ id: 'nami', level: 12 });
+  const wipedRes = S.voyageBank(wiped.s, wiped.run, 'wipe');
+  check(wipedRes.recruited.indexOf('nami') >= 0 && wiped.s.roster.indexOf('nami') >= 0, 'a castaway joins even when the voyage is lost');
+}
+
+/* ---- carried damage, rations and save migration ---- */
+{
+  const S = sandbox;
+  const st = S.newStoryState();
+  S.recruit(st, 'zoro', 10);
+  const run = S.newVoyage(st, 'east-blue', ['luffy', 'zoro'], 1);
+  check(S.voyageStanding(run).length === 2 && !S.voyageDown(run).length, 'a voyage sets out at full health');
+
+  S.voyageSync(run, [{ id: 'luffy', hp: 0.4, status: 'burn' }]);
+  check(run.hp['luffy'] === 0.4 && run.status['luffy'] === 'burn', 'damage and status carry off the battlefield');
+  check(run.hp['zoro'] === 1, 'a fighter who sat out is untouched');
+
+  const stores = run.rations;
+  check(S.useRation(run) && run.rations === stores - 1, 'a ration is spent when it is eaten');
+  check(run.hp['luffy'] > 0.4 && run.status['luffy'] === null, 'a ration heals and cures');
+
+  run.rations = 0;
+  check(!S.useRation(run), 'you cannot eat what you do not have');
+  check(!S.voyageCutAndRun(run), 'breaking off needs a ration too');
+
+  // a squall can end a voyage on its own — that is what makes routing matter
+  const stormy = S.newVoyage(st, 'east-blue', ['luffy'], 1);
+  stormy.hp['luffy'] = 0.05;
+  const storm = { kind: 'storm', fight: null, level: 10, depth: 1, xpMul: 0.15, berryMul: 0, foes: [] };
+  S.voyageResolveEvent(st, stormy, storm, () => 0.5);
+  check(stormy.over === 'wipe', 'a squall can take your last fighter');
+
+  // an anchorage is the relief you route toward
+  const rest = S.newVoyage(st, 'east-blue', ['luffy', 'zoro'], 1);
+  rest.hp['luffy'] = 0.2; rest.status['luffy'] = 'poison';
+  const storesBefore = rest.rations;
+  S.voyageResolveEvent(st, rest, { kind: 'anchorage', fight: null, level: 10, depth: 0, xpMul: 0, berryMul: 0, foes: [] }, () => 0.5);
+  check(rest.hp['luffy'] > 0.2 && rest.status['luffy'] === null, 'an anchorage patches the crew up');
+  check(rest.rations === storesBefore + 1, 'an anchorage resupplies');
+
+  // migration: an old save has no world at all, and a broken one must not throw
+  const old = S.newStoryState();
+  delete old.world;
+  check(S.worldEnsure(old) && old.world.seed >= 1, 'a save from before the open sea gains one');
+  const broken = S.newStoryState();
+  broken.world = { run: 'not an object', best: 7, made: null, voyages: 'many' };
+  const fixed = S.worldEnsure(broken);
+  check(fixed.run === null && typeof fixed.best === 'object' && fixed.voyages === 0, 'a corrupt world block is repaired, not fatal');
+  const finished = S.newStoryState();
+  finished.world = { run: { party: ['luffy'], over: 'port' } };
+  check(S.worldEnsure(finished).run === null, 'a voyage that already ended is not resumed');
+}
+
+/* ---- a voyage is actually sailable ---- */
+{
+  const S = sandbox;
+  const power = id => S.worldBst(id) + (S.CHAR_BY_ID[id].awaken ? 90 : 0);
+
+  const graft = (battle, run, ids) => battle.sides.player.crew.forEach((f, i) => {
+    f.hp = Math.max(1, Math.round(f.maxHp * run.hp[ids[i]]));
+    f.status = run.status[ids[i]] || null;
+  });
+  const readBack = (battle, ids) => battle.sides.player.crew.map((f, i) => ({
+    id: ids[i], hp: f.alive ? f.hp / f.maxHp : 0, status: f.status,
+  }));
+
+  function fight(st, run, node, ids) {
+    const opts = { playerLevels: ids.map(id => S.levelOf(st, id)), enemyLevels: S.voyageFoeLevel(run, node) };
+    if (node.fight === 'doubles' && ids.length >= 2) {
+      const b = new S.DoublesBattle(ids, node.foes, opts);
+      graft(b, run, ids);
+      let g = 0;
+      while (!b.over && g < 400) {
+        g++;
+        if (b.awaiting) {
+          for (const p of b.awaiting.positions.slice()) {
+            if (!b.awaiting) break;
+            const bn = b.benchIndices('player');
+            if (bn.length) b.submitReplace(p, bn[0]);
+          }
+          if (b.awaiting) break;
+          continue;
+        }
+        b.playRound(b.livingPositions('player').map(p => ({ pos: p, ...b.chooseAI('player', p) })));
+      }
+      return { won: b.winner === 'player' && b.sides.player.crew.some(f => f.alive), entries: readBack(b, ids) };
+    }
+    const b = new S.Battle(ids, node.foes, opts);
+    graft(b, run, ids);
+    let g = 0;
+    while (!b.over && g < 300) {
+      g++;
+      if (b.awaitingReplace) {
+        const idx = b.sides.player.crew.findIndex(f => f.alive);
+        if (idx < 0) break;
+        b.submitReplace(idx);
+        continue;
+      }
+      b.playTurn(b.chooseAI('player'));
+    }
+    return { won: b.winner === 'player' && b.sides.player.crew.some(f => f.alive), entries: readBack(b, ids) };
+  }
+
+  /* Send whoever the type chart likes best — the mode's signature decision. */
+  function pickDuelist(st, run, node, standing) {
+    let best = standing[0], bestScore = -Infinity;
+    for (const id of standing) {
+      const probe = new S.Battle([id], node.foes, { playerLevels: [S.levelOf(st, id)], enemyLevels: S.voyageFoeLevel(run, node) });
+      const me = probe.sides.player.crew[0];
+      me.hp = Math.max(1, Math.round(me.maxHp * run.hp[id]));
+      const sc = probe.matchupScore(me, probe.sides.enemy.crew[0]);
+      if (sc > bestScore) { bestScore = sc; best = id; }
+    }
+    return best;
+  }
+
+  function sail(st, seaId, opts) {
+    const o = opts || {};
+    const party = [...st.roster].sort((a, b) => power(b) - power(a)).slice(0, S.VOYAGE_PARTY_MAX);
+    const seed = Math.floor(Math.random() * 1e9);
+    const chart = S.generateChart(seaId, seed);
+    const run = S.newVoyage(st, seaId, party, seed);
+    const health = () => run.party.reduce((a, id) => a + run.hp[id], 0) / run.party.length;
+
+    for (let guard = 0; guard < 40 && !run.over; guard++) {
+      const routes = S.chartRoutes(chart, run.at);
+      if (!routes.length) break;
+      if (health() < 0.4 && run.legs >= 2) return S.voyageBank(st, run, 'turnback');
+      // hurt crews take the calmest water; healthy ones chase the payout
+      const scored = routes.map(n => ({
+        n, threat: S.voyageThreat(st, run, n),
+        pay: S.nodeXp(n, S.voyageFoeLevel(run, n)) + S.nodeBerries(n, S.voyageFoeLevel(run, n)),
+      }));
+      scored.sort((a, b) => health() < 0.6 ? (a.threat - b.threat) || (b.pay - a.pay) : (b.pay - a.pay) || (a.threat - b.threat));
+      const node = S.voyageSail(chart, run, scored[0].n.id);
+      if (node.kind === 'port') return S.voyageBank(st, run, 'port');
+      if (run.rations > 0 && health() < 0.45) S.useRation(run);
+      if (!node.fight) { S.voyageResolveEvent(st, run, node, Math.random); continue; }
+      const standing = S.voyageStanding(run);
+      if (!standing.length) break;
+      const ids = node.fight === 'duel'
+        ? [o.noPick ? standing[0] : pickDuelist(st, run, node, standing)]
+        : standing;
+      const res = fight(st, run, node, ids);
+      S.voyageResolveBattle(st, run, node, res.won, res.entries);
+    }
+    return S.voyageBank(st, run, run.over || 'wipe');
+  }
+
+  function saveAfter(chapters, level) {
+    const st = S.newStoryState();
+    for (let i = 0; i < chapters; i++) {
+      st.cleared.push(S.STORY[i].id);
+      for (const u of (S.STORY[i].unlock || [])) S.recruit(st, u, S.STORY[i].level + 2);
+    }
+    for (const id of st.roster) st.level[id] = level;
+    st.berries = 0;
+    return st;
+  }
+
+  const RUNS = 14;
+  const report = [];
+  for (const sc of [{ sea: 'east-blue', ch: 2, lv: 12 }, { sea: 'paradise', ch: 6, lv: 28 }]) {
+    const tally = { port: 0, turnback: 0, wipe: 0 };
+    let berries = 0, xp = 0;
+    for (let i = 0; i < RUNS; i++) {
+      const st = saveAfter(sc.ch, sc.lv);
+      const res = sail(st, sc.sea);
+      tally[res.how]++;
+      berries += res.berries; xp += res.xpEach;
+      check(st.berries === res.berries, `${sc.sea}: the purse matches the ledger`);
+      check(res.legs >= 1, `${sc.sea}: a voyage covers ground`);
+    }
+    report.push(`${sc.sea} Lv${sc.lv}: ${tally.port} port / ${tally.turnback} turned back / ${tally.wipe} lost, ` +
+      `${Math.round(berries / RUNS).toLocaleString()} berries a voyage`);
+    check(tally.port + tally.turnback >= RUNS * 0.5, `${sc.sea}: most voyages come home with something (${tally.port + tally.turnback}/${RUNS})`);
+    check(tally.wipe < RUNS, `${sc.sea}: the sea is not unbeatable`);
+    check(berries / RUNS > sandbox.trainCost(sc.lv), `${sc.sea}: a voyage funds at least a level at the tavern`);
+  }
+  console.log('\nvoyages: ' + report.join('\n          '));
+
+  // the deep water must actually be deeper than the shallows
+  const shallow = saveAfter(2, 12), deep = saveAfter(2, 12);
+  check(S.SEA_BY_ID['new-world'].lo > S.SEA_BY_ID['east-blue'].hi, 'the New World starts above East Blue\'s ceiling');
+  check(!S.seaUnlocked(shallow, S.SEA_BY_ID['sky']) && !S.seaUnlocked(deep, S.SEA_BY_ID['new-world']), 'a rookie crew cannot reach the deep seas at all');
 }
 
 console.log(failures === 0 ? '\nALL TESTS PASSED ✓' : `\n${failures} FAILURES ✗`);
